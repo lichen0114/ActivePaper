@@ -4,9 +4,18 @@ import { OpenAIProvider } from './openai'
 import { AnthropicProvider } from './anthropic'
 import { KeyStore } from '../security/key-store'
 
+export type ActionType = 'explain' | 'summarize' | 'define'
+
+export interface ConversationMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
 export interface CompletionRequest {
   text: string
   context?: string
+  action?: ActionType
+  conversationHistory?: ConversationMessage[]
 }
 
 export interface AIProvider {

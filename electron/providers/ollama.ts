@@ -1,4 +1,4 @@
-import type { AIProvider, CompletionRequest } from './index'
+import type { AIProvider, CompletionRequest, ConversationMessage } from './index'
 
 const OLLAMA_BASE_URL = 'http://localhost:11434'
 const DEFAULT_MODEL = 'llama3.2'
@@ -21,6 +21,12 @@ export class OllamaProvider implements AIProvider {
   }
 
   async *complete(request: CompletionRequest): AsyncIterable<string> {
+    // If there's conversation history, use chat endpoint
+    if (request.conversationHistory && request.conversationHistory.length > 0) {
+      yield* this.completeChat(request)
+      return
+    }
+
     const prompt = this.buildPrompt(request)
 
     const response = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
@@ -70,29 +76,83 @@ export class OllamaProvider implements AIProvider {
     }
   }
 
-  private buildPrompt(request: CompletionRequest): string {
-    let prompt = `You are a helpful AI assistant helping a user understand a PDF document.
+  private async *completeChat(request: CompletionRequest): AsyncIterable<string> {
+    const messages = request.conversationHistory!.map((msg: ConversationMessage) => ({
+      role: msg.role,
+      content: msg.content
+    }))
 
-The user has selected the following text and wants help understanding it:
+    const response = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: DEFAULT_MODEL,
+        messages,
+        stream: true,
+      }),
+    })
 
-Selected text:
-"""
-${request.text}
-"""
-`
-
-    if (request.context) {
-      prompt += `
-Surrounding context from the document:
-"""
-${request.context}
-"""
-`
+    if (!response.ok) {
+      throw new Error(`Ollama error: ${response.status} ${response.statusText}`)
     }
 
-    prompt += `
-Please provide a clear, helpful explanation of the selected text. If it contains technical terms, explain them. If it's a concept, provide context and examples where helpful. Keep your response concise but thorough.`
+    const reader = response.body?.getReader()
+    if (!reader) {
+      throw new Error('No response body')
+    }
 
+    const decoder = new TextDecoder()
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        const text = decoder.decode(value, { stream: true })
+        const lines = text.split('\n').filter(line => line.trim())
+
+        for (const line of lines) {
+          try {
+            const json = JSON.parse(line)
+            if (json.message?.content) {
+              yield json.message.content
+            }
+          } catch {
+            // Skip invalid JSON lines
+          }
+        }
+      }
+    } finally {
+      reader.releaseLock()
+    }
+  }
+
+  private buildPrompt(request: CompletionRequest): string {
+    const action = request.action || 'explain'
+    let prompt = 'You are a helpful AI assistant helping a user understand a PDF document.\n\n'
+
+    switch (action) {
+      case 'summarize':
+        prompt += `Summarize the key points of this text:\n\n"${request.text}"`
+        break
+      case 'define':
+        prompt += `Define and explain this term or concept:\n\n"${request.text}"`
+        if (request.context) {
+          prompt += `\n\nContext from the document:\n"${request.context}"`
+        }
+        break
+      case 'explain':
+      default:
+        prompt += `Explain this text in simple terms:\n\n"${request.text}"`
+        if (request.context) {
+          prompt += `\n\nSurrounding context from the document:\n"${request.context}"`
+        }
+        break
+    }
+
+    prompt += '\n\nKeep your response concise but thorough.'
     return prompt
   }
 }

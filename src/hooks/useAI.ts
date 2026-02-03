@@ -1,4 +1,6 @@
 import { useState, useCallback } from 'react'
+import type { ActionType } from './useHistory'
+import type { Message } from './useConversation'
 
 interface AIState {
   response: string
@@ -13,7 +15,12 @@ export function useAI() {
     error: null,
   })
 
-  const askAI = useCallback(async (text: string, context?: string) => {
+  const askAI = useCallback(async (
+    text: string,
+    context?: string,
+    action: ActionType = 'explain',
+    conversationHistory?: Message[]
+  ) => {
     if (!window.api) {
       setState({
         response: '',
@@ -34,6 +41,8 @@ export function useAI() {
         text,
         context || '',
         undefined, // Use current provider
+        action,
+        conversationHistory,
         // onChunk
         (chunk) => {
           setState((prev) => ({

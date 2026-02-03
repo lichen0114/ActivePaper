@@ -36,16 +36,26 @@ AI PDF Reader is an Electron + React desktop app that lets users select text in 
 ### Data Flow
 
 1. User selects text in `PDFViewer` → `useSelection` hook captures text + page context + selection position
-2. User clicks floating "Ask AI" button (or Cmd+J) → `useAI` hook calls `window.api.askAI()`
-3. IPC to main process → `ProviderManager` routes to selected AI provider
+2. User clicks action in floating toolbar (Explain/Summarize/Define) or presses Cmd+J → `useAI` hook calls `window.api.askAI()` with action type
+3. IPC to main process → `ProviderManager` routes to selected AI provider with action-specific prompts
 4. Provider streams response via AsyncIterable → chunks sent back via dynamic IPC channel
-5. `ResponsePanel` renders streamed markdown in real-time
+5. `ResponsePanel` (right sidebar) renders streamed markdown in real-time
+6. User can send follow-up questions → conversation history is passed to provider for context
 
 ### AI Provider System
 
 Providers in `electron/providers/` implement the `AIProvider` interface:
 
 ```typescript
+type ActionType = 'explain' | 'summarize' | 'define'
+
+interface CompletionRequest {
+  text: string
+  context?: string
+  action?: ActionType
+  conversationHistory?: Array<{ role: 'user' | 'assistant'; content: string }>
+}
+
 interface AIProvider {
   id: string
   name: string
@@ -57,7 +67,7 @@ interface AIProvider {
 
 Current providers: `ollama` (local), `gemini`, `openai`, `anthropic` (cloud).
 
-To add a new provider: implement the interface with an async generator `complete()` method, then register in `ProviderManager.initializeProviders()`. Call `refreshProviders()` after API key changes to reinitialize providers with new keys.
+To add a new provider: implement the interface with an async generator `complete()` method, then register in `ProviderManager.initializeProviders()`. Call `refreshProviders()` after API key changes to reinitialize providers with new keys. Each provider should implement action-specific prompt templates in a `buildUserMessage()` or similar method.
 
 ### Security
 
@@ -67,10 +77,24 @@ To add a new provider: implement the interface with an async generator `complete
 
 ### Key IPC Channels
 
-- `ai:query` - Start streaming AI query (returns `channelId` for streaming responses)
+- `ai:query` - Start streaming AI query (returns `channelId` for streaming responses). Accepts `{ text, context, providerId, action, conversationHistory }`
 - `provider:list/getCurrent/setCurrent` - Provider management
 - `keys:set/has/delete` - API key management
 - `file:read` - Read file from disk (returns `ArrayBuffer`, not `Buffer`)
+
+### UI Layout
+
+The app uses a side-by-side layout:
+- **PDF container**: Flexes to fill available space, gets `mr-[400px]` margin when sidebar opens (content reflows)
+- **ResponsePanel**: Fixed 400px right sidebar with glass aesthetic (`glass-panel` class), slides in/out with CSS transforms
+- **SelectionPopover**: Pill-shaped floating toolbar that appears above text selection with Explain/Summarize/Define actions
+
+### React Hooks
+
+- `useSelection` - Captures text selection, page context, and DOMRect position
+- `useAI` - Manages AI query state, streaming responses, supports action types and conversation history
+- `useConversation` - Manages follow-up conversation state (messages array, selected text context)
+- `useHistory` - Tracks session query history (in-memory, cleared on app restart)
 
 ## Build Notes
 
@@ -89,6 +113,13 @@ PDF.js directly manipulates the DOM, which conflicts with React's virtual DOM. T
 1. **Separate render targets**: Use a nested structure where React manages the outer container and loading states, but PDF.js renders into a dedicated child div that React never updates
 2. **Guard against re-renders**: Check `container.querySelector('canvas')` before rendering to skip already-rendered pages
 3. **Clear on scale change**: When scale changes, manually clear PDF.js containers with `innerHTML = ''` before re-rendering
+
+### TextLayer CSS Requirements
+
+For proper text selection behavior, the `.textLayer` element requires:
+
+- **`--scale-factor` CSS variable**: Set via `textLayer.style.setProperty('--scale-factor', scale.toString())` before rendering. PDF.js uses this for proper span sizing.
+- **`.endOfContent` styles**: PDF.js creates this element to terminate selection. Without proper CSS, selections extend too far right. See `src/styles/index.css` for required styles.
 
 ### PDFViewer Rendering Pattern
 

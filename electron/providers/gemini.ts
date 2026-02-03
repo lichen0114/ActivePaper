@@ -1,4 +1,4 @@
-import type { AIProvider, CompletionRequest } from './index'
+import type { AIProvider, CompletionRequest, ActionType, ConversationMessage } from './index'
 
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:streamGenerateContent'
 
@@ -18,7 +18,7 @@ export class GeminiProvider implements AIProvider {
       throw new Error('Gemini API key not configured')
     }
 
-    const prompt = this.buildPrompt(request)
+    const contents = this.buildContents(request)
 
     const response = await fetch(`${GEMINI_API_URL}?key=${this.apiKey}&alt=sse`, {
       method: 'POST',
@@ -26,11 +26,7 @@ export class GeminiProvider implements AIProvider {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        contents: [
-          {
-            parts: [{ text: prompt }],
-          },
-        ],
+        contents,
         generationConfig: {
           temperature: 0.7,
           maxOutputTokens: 2048,
@@ -77,29 +73,44 @@ export class GeminiProvider implements AIProvider {
     }
   }
 
-  private buildPrompt(request: CompletionRequest): string {
-    let prompt = `You are a helpful AI assistant helping a user understand a PDF document.
+  private buildContents(request: CompletionRequest): Array<{ role: string; parts: Array<{ text: string }> }> {
+    const action = request.action || 'explain'
 
-The user has selected the following text and wants help understanding it:
-
-Selected text:
-"""
-${request.text}
-"""
-`
-
-    if (request.context) {
-      prompt += `
-Surrounding context from the document:
-"""
-${request.context}
-"""
-`
+    // If there's conversation history (follow-up), include it
+    if (request.conversationHistory && request.conversationHistory.length > 0) {
+      return request.conversationHistory.map((msg: ConversationMessage) => ({
+        role: msg.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: msg.content }]
+      }))
     }
 
-    prompt += `
-Please provide a clear, helpful explanation of the selected text. If it contains technical terms, explain them. If it's a concept, provide context and examples where helpful. Keep your response concise but thorough.`
+    const prompt = this.buildPrompt(request.text, request.context, action)
+    return [{ role: 'user', parts: [{ text: prompt }] }]
+  }
 
+  private buildPrompt(text: string, context: string | undefined, action: ActionType): string {
+    let prompt = 'You are a helpful AI assistant helping a user understand a PDF document.\n\n'
+
+    switch (action) {
+      case 'summarize':
+        prompt += `Summarize the key points of this text:\n\n"${text}"`
+        break
+      case 'define':
+        prompt += `Define and explain this term or concept:\n\n"${text}"`
+        if (context) {
+          prompt += `\n\nContext from the document:\n"${context}"`
+        }
+        break
+      case 'explain':
+      default:
+        prompt += `Explain this text in simple terms:\n\n"${text}"`
+        if (context) {
+          prompt += `\n\nSurrounding context from the document:\n"${context}"`
+        }
+        break
+    }
+
+    prompt += '\n\nKeep your response concise but thorough.'
     return prompt
   }
 }

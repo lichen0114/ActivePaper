@@ -223,3 +223,87 @@ body {
 .selection-popover {
   animation: popover-fade-in 0.15s ease-out;
 }
+
+/* Glass panel effect */
+.glass-panel {
+  background: rgba(30, 30, 35, 0.85);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+}
+
+/* Selection toolbar animation */
+.selection-toolbar {
+  animation: fadeInUp 0.15s ease-out;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Enhanced markdown content styling */
+.markdown-content-enhanced {
+  @apply text-gray-200;
+  line-height: 1.6;
+}
+
+.markdown-content-enhanced h1,
+.markdown-content-enhanced h2,
+.markdown-content-enhanced h3,
+.markdown-content-enhanced h4 {
+  @apply font-semibold text-white mt-4 mb-2;
+}
+
+.markdown-content-enhanced h1 { @apply text-xl; }
+.markdown-content-enhanced h2 { @apply text-lg; }
+.markdown-content-enhanced h3 { @apply text-base; }
+
+.markdown-content-enhanced p {
+  @apply mb-3;
+}
+
+.markdown-content-enhanced ul,
+.markdown-content-enhanced ol {
+  @apply ml-4 mb-3;
+}
+
+.markdown-content-enhanced li {
+  @apply mb-2;
+}
+
+.markdown-content-enhanced ul { @apply list-disc; }
+.markdown-content-enhanced ol { @apply list-decimal; }
+
+.markdown-content-enhanced code {
+  @apply bg-gray-800 px-1.5 py-0.5 rounded text-sm font-mono text-blue-300;
+}
+
+.markdown-content-enhanced pre {
+  @apply bg-gray-800 p-3 rounded-lg mb-3 overflow-x-auto;
+}
+
+.markdown-content-enhanced pre code {
+  @apply bg-transparent p-0;
+}
+
+.markdown-content-enhanced blockquote {
+  @apply border-l-4 border-gray-600 pl-4 italic text-gray-400 mb-3;
+}
+
+.markdown-content-enhanced a {
+  @apply text-blue-400 hover:underline;
+}
+
+.markdown-content-enhanced strong {
+  @apply font-bold text-white;
+}
+
+.markdown-content-enhanced em {
+  @apply italic;
+}

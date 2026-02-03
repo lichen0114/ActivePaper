@@ -99,7 +99,7 @@ function setupIPC() {
   providerManager = new ProviderManager()
 
   // AI Query handler with streaming
-  ipcMain.handle('ai:query', async (_event, { text, context, providerId }) => {
+  ipcMain.handle('ai:query', async (_event, { text, context, providerId, action, conversationHistory }) => {
     try {
       const provider = providerManager.getProvider(providerId)
       if (!provider) {
@@ -117,7 +117,7 @@ function setupIPC() {
       // Start streaming in background
       ;(async () => {
         try {
-          const stream = provider.complete({ text, context })
+          const stream = provider.complete({ text, context, action, conversationHistory })
           for await (const chunk of stream) {
             mainWindow?.webContents.send(channelId, { type: 'chunk', data: chunk })
           }

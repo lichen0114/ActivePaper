@@ -9,7 +9,10 @@ export default {
       colors: {
         'provider-local': '#22c55e',
         'provider-cloud': '#3b82f6',
-      }
+      },
+      fontFamily: {
+        sans: ['Inter', 'system-ui', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'Roboto', 'sans-serif'],
+      },
     },
   },
   plugins: [],

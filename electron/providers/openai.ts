@@ -1,4 +1,4 @@
-import type { AIProvider, CompletionRequest } from './index'
+import type { AIProvider, CompletionRequest, ActionType, ConversationMessage } from './index'
 
 const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions'
 
@@ -78,27 +78,50 @@ export class OpenAIProvider implements AIProvider {
   }
 
   private buildMessages(request: CompletionRequest): Array<{ role: string; content: string }> {
-    const systemPrompt = `You are a helpful AI assistant helping a user understand a PDF document. When the user selects text from the document, you provide clear, helpful explanations. If the text contains technical terms, explain them. If it's a concept, provide context and examples where helpful. Keep your responses concise but thorough.`
+    const systemPrompt = `You are a helpful AI assistant helping a user understand a PDF document. Keep your responses concise but thorough.`
 
-    let userMessage = `I've selected the following text from a PDF document and would like help understanding it:
+    const action = request.action || 'explain'
+    const userMessage = this.buildUserMessage(request.text, request.context, action)
 
-Selected text:
-"""
-${request.text}
-"""`
-
-    if (request.context) {
-      userMessage += `
-
-Surrounding context from the document:
-"""
-${request.context}
-"""`
+    // If there's conversation history (follow-up), include it
+    if (request.conversationHistory && request.conversationHistory.length > 0) {
+      return [
+        { role: 'system', content: systemPrompt },
+        ...request.conversationHistory.map((msg: ConversationMessage) => ({
+          role: msg.role,
+          content: msg.content
+        }))
+      ]
     }
 
     return [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userMessage },
     ]
+  }
+
+  private buildUserMessage(text: string, context: string | undefined, action: ActionType): string {
+    let prompt = ''
+
+    switch (action) {
+      case 'summarize':
+        prompt = `Summarize the key points of this text from a PDF document:\n\n"${text}"`
+        break
+      case 'define':
+        prompt = `Define and explain this term or concept from a PDF document:\n\n"${text}"`
+        if (context) {
+          prompt += `\n\nContext from the document:\n"${context}"`
+        }
+        break
+      case 'explain':
+      default:
+        prompt = `Explain this text from a PDF document in simple terms:\n\n"${text}"`
+        if (context) {
+          prompt += `\n\nSurrounding context from the document:\n"${context}"`
+        }
+        break
+    }
+
+    return prompt
   }
 }

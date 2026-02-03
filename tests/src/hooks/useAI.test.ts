@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { renderHook, act, waitFor } from '@testing-library/react'
+import { renderHook, act } from '@testing-library/react'
 import { useAI } from '@/hooks/useAI'
 
 describe('useAI', () => {
@@ -51,6 +51,8 @@ describe('useAI', () => {
           _text: string,
           _context: string,
           _providerId: string | undefined,
+          _action: string | undefined,
+          _conversationHistory: unknown[] | undefined,
           onChunk: (chunk: string) => void,
           onDone: () => void
         ) => {
@@ -77,6 +79,8 @@ describe('useAI', () => {
           _text: string,
           _context: string,
           _providerId: string | undefined,
+          _action: string | undefined,
+          _conversationHistory: unknown[] | undefined,
           _onChunk: (chunk: string) => void,
           _onDone: () => void,
           onError: (error: string) => void
@@ -127,6 +131,8 @@ describe('useAI', () => {
           _text: string,
           _context: string,
           _providerId: string | undefined,
+          _action: string | undefined,
+          _conversationHistory: unknown[] | undefined,
           _onChunk: (chunk: string) => void,
           onDone: () => void
         ) => {
@@ -144,6 +150,8 @@ describe('useAI', () => {
         'selected text',
         'surrounding context',
         undefined,
+        'explain',
+        undefined,
         expect.any(Function),
         expect.any(Function),
         expect.any(Function)
@@ -156,6 +164,8 @@ describe('useAI', () => {
           _text: string,
           _context: string,
           _providerId: string | undefined,
+          _action: string | undefined,
+          _conversationHistory: unknown[] | undefined,
           _onChunk: (chunk: string) => void,
           onDone: () => void
         ) => {
@@ -173,6 +183,8 @@ describe('useAI', () => {
         'selected text',
         '',
         undefined,
+        'explain',
+        undefined,
         expect.any(Function),
         expect.any(Function),
         expect.any(Function)
@@ -186,6 +198,8 @@ describe('useAI', () => {
           _text: string,
           _context: string,
           _providerId: string | undefined,
+          _action: string | undefined,
+          _conversationHistory: unknown[] | undefined,
           onChunk: (chunk: string) => void,
           onDone: () => void
         ) => {
@@ -213,6 +227,77 @@ describe('useAI', () => {
 
       expect(result.current.response).toBe('Second response')
     })
+
+    it('should pass action type to askAI', async () => {
+      mockWindowApi.askAI.mockImplementation(
+        async (
+          _text: string,
+          _context: string,
+          _providerId: string | undefined,
+          _action: string | undefined,
+          _conversationHistory: unknown[] | undefined,
+          _onChunk: (chunk: string) => void,
+          onDone: () => void
+        ) => {
+          onDone()
+        }
+      )
+
+      const { result } = renderHook(() => useAI())
+
+      await act(async () => {
+        await result.current.askAI('selected text', 'context', 'summarize')
+      })
+
+      expect(mockWindowApi.askAI).toHaveBeenCalledWith(
+        'selected text',
+        'context',
+        undefined,
+        'summarize',
+        undefined,
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function)
+      )
+    })
+
+    it('should pass conversation history to askAI', async () => {
+      const conversationHistory = [
+        { role: 'user' as const, content: 'Hello' },
+        { role: 'assistant' as const, content: 'Hi there!' },
+      ]
+
+      mockWindowApi.askAI.mockImplementation(
+        async (
+          _text: string,
+          _context: string,
+          _providerId: string | undefined,
+          _action: string | undefined,
+          _conversationHistory: unknown[] | undefined,
+          _onChunk: (chunk: string) => void,
+          onDone: () => void
+        ) => {
+          onDone()
+        }
+      )
+
+      const { result } = renderHook(() => useAI())
+
+      await act(async () => {
+        await result.current.askAI('selected text', 'context', 'explain', conversationHistory)
+      })
+
+      expect(mockWindowApi.askAI).toHaveBeenCalledWith(
+        'selected text',
+        'context',
+        undefined,
+        'explain',
+        conversationHistory,
+        expect.any(Function),
+        expect.any(Function),
+        expect.any(Function)
+      )
+    })
   })
 
   describe('when window.api is not available', () => {
@@ -237,6 +322,8 @@ describe('useAI', () => {
           _text: string,
           _context: string,
           _providerId: string | undefined,
+          _action: string | undefined,
+          _conversationHistory: unknown[] | undefined,
           onChunk: (chunk: string) => void,
           onDone: () => void
         ) => {

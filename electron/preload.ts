@@ -1,5 +1,12 @@
 import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
+export type ActionType = 'explain' | 'summarize' | 'define'
+
+export interface ConversationMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
 export interface ProviderInfo {
   id: string
   name: string
@@ -19,11 +26,13 @@ contextBridge.exposeInMainWorld('api', {
     text: string,
     context: string,
     providerId?: string,
+    action?: ActionType,
+    conversationHistory?: ConversationMessage[],
     onChunk?: (chunk: string) => void,
     onDone?: () => void,
     onError?: (error: string) => void
   ): Promise<void> => {
-    const result = await ipcRenderer.invoke('ai:query', { text, context, providerId })
+    const result = await ipcRenderer.invoke('ai:query', { text, context, providerId, action, conversationHistory })
     const { channelId } = result
 
     return new Promise((resolve, reject) => {
@@ -99,6 +108,8 @@ declare global {
         text: string,
         context: string,
         providerId?: string,
+        action?: ActionType,
+        conversationHistory?: ConversationMessage[],
         onChunk?: (chunk: string) => void,
         onDone?: () => void,
         onError?: (error: string) => void

@@ -9,7 +9,12 @@ describe('ResponsePanel', () => {
     isLoading: false,
     error: null,
     selectedText: '',
+    messages: [] as Array<{ role: 'user' | 'assistant'; content: string }>,
     onClose: vi.fn(),
+    onFollowUp: vi.fn(),
+    history: [],
+    onHistorySelect: vi.fn(),
+    currentAction: 'explain' as const,
   }
 
   beforeEach(() => {
@@ -20,13 +25,15 @@ describe('ResponsePanel', () => {
     it('should render when isOpen is true', () => {
       render(<ResponsePanel {...defaultProps} />)
 
-      expect(screen.getByText('AI Response')).toBeInTheDocument()
+      expect(screen.getByText('Copilot')).toBeInTheDocument()
     })
 
-    it('should not render when isOpen is false', () => {
-      render(<ResponsePanel {...defaultProps} isOpen={false} />)
+    it('should be hidden when isOpen is false', () => {
+      const { container } = render(<ResponsePanel {...defaultProps} isOpen={false} />)
 
-      expect(screen.queryByText('AI Response')).not.toBeInTheDocument()
+      // Panel should have translate-x-full when closed
+      const aside = container.querySelector('aside')
+      expect(aside).toHaveClass('translate-x-full')
     })
   })
 
@@ -37,8 +44,8 @@ describe('ResponsePanel', () => {
       expect(screen.getByText('Thinking...')).toBeInTheDocument()
     })
 
-    it('should show analyzing message when loading with no response', () => {
-      render(<ResponsePanel {...defaultProps} isLoading={true} />)
+    it('should show analyzing message when loading with no response and no messages', () => {
+      render(<ResponsePanel {...defaultProps} isLoading={true} messages={[]} />)
 
       expect(screen.getByText('Analyzing your selection...')).toBeInTheDocument()
     })
@@ -50,10 +57,22 @@ describe('ResponsePanel', () => {
 
       expect(screen.queryByText('Analyzing your selection...')).not.toBeInTheDocument()
     })
+
+    it('should not show analyzing message when there are messages', () => {
+      render(
+        <ResponsePanel
+          {...defaultProps}
+          isLoading={true}
+          messages={[{ role: 'assistant', content: 'Some content' }]}
+        />
+      )
+
+      expect(screen.queryByText('Analyzing your selection...')).not.toBeInTheDocument()
+    })
   })
 
   describe('response display', () => {
-    it('should render markdown response', () => {
+    it('should render markdown response when no messages', () => {
       render(<ResponsePanel {...defaultProps} response="**Bold text** and *italic*" />)
 
       // ReactMarkdown should render the bold text
@@ -79,7 +98,7 @@ describe('ResponsePanel', () => {
         <ResponsePanel {...defaultProps} isLoading={true} response="Loading..." />
       )
 
-      const markdownContent = container.querySelector('.markdown-content')
+      const markdownContent = container.querySelector('.markdown-content-enhanced')
       expect(markdownContent).toHaveClass('typing-cursor')
     })
 
@@ -88,7 +107,7 @@ describe('ResponsePanel', () => {
         <ResponsePanel {...defaultProps} isLoading={false} response="Done" />
       )
 
-      const markdownContent = container.querySelector('.markdown-content')
+      const markdownContent = container.querySelector('.markdown-content-enhanced')
       expect(markdownContent).not.toHaveClass('typing-cursor')
     })
   })
@@ -115,14 +134,15 @@ describe('ResponsePanel', () => {
         <ResponsePanel {...defaultProps} selectedText="This is selected text" />
       )
 
-      expect(screen.getByText('Selected text:')).toBeInTheDocument()
       expect(screen.getByText('This is selected text')).toBeInTheDocument()
     })
 
     it('should not display selected text section when empty', () => {
-      render(<ResponsePanel {...defaultProps} selectedText="" />)
+      const { container } = render(<ResponsePanel {...defaultProps} selectedText="" />)
 
-      expect(screen.queryByText('Selected text:')).not.toBeInTheDocument()
+      // QuoteCard should not be rendered
+      const quoteCard = container.querySelector('.border-l-\\[3px\\]')
+      expect(quoteCard).not.toBeInTheDocument()
     })
   })
 
@@ -131,7 +151,8 @@ describe('ResponsePanel', () => {
       const onClose = vi.fn()
       render(<ResponsePanel {...defaultProps} onClose={onClose} />)
 
-      const closeButton = screen.getByRole('button')
+      // Find close button by title
+      const closeButton = screen.getByTitle('Close')
       fireEvent.click(closeButton)
 
       expect(onClose).toHaveBeenCalledTimes(1)
@@ -189,6 +210,87 @@ describe('ResponsePanel', () => {
       expect(screen.getByText('Selected text')).toBeInTheDocument()
       expect(screen.getByText('Response content')).toBeInTheDocument()
       expect(screen.getByText('Thinking...')).toBeInTheDocument()
+    })
+  })
+
+  describe('conversation messages', () => {
+    it('should render user and assistant messages', () => {
+      render(
+        <ResponsePanel
+          {...defaultProps}
+          messages={[
+            { role: 'user', content: 'User question' },
+            { role: 'assistant', content: 'Assistant response' },
+          ]}
+        />
+      )
+
+      expect(screen.getByText('User question')).toBeInTheDocument()
+      expect(screen.getByText('Assistant response')).toBeInTheDocument()
+    })
+  })
+
+  describe('follow-up input', () => {
+    it('should render follow-up input', () => {
+      render(<ResponsePanel {...defaultProps} />)
+
+      expect(screen.getByPlaceholderText('Ask a follow-up...')).toBeInTheDocument()
+    })
+
+    it('should call onFollowUp when form is submitted', () => {
+      const onFollowUp = vi.fn()
+      render(<ResponsePanel {...defaultProps} onFollowUp={onFollowUp} />)
+
+      const input = screen.getByPlaceholderText('Ask a follow-up...')
+      fireEvent.change(input, { target: { value: 'Follow up question' } })
+      fireEvent.submit(input.closest('form')!)
+
+      expect(onFollowUp).toHaveBeenCalledWith('Follow up question')
+    })
+
+    it('should not call onFollowUp when input is empty', () => {
+      const onFollowUp = vi.fn()
+      render(<ResponsePanel {...defaultProps} onFollowUp={onFollowUp} />)
+
+      const input = screen.getByPlaceholderText('Ask a follow-up...')
+      fireEvent.submit(input.closest('form')!)
+
+      expect(onFollowUp).not.toHaveBeenCalled()
+    })
+
+    it('should disable input when loading', () => {
+      render(<ResponsePanel {...defaultProps} isLoading={true} />)
+
+      const input = screen.getByPlaceholderText('Ask a follow-up...')
+      expect(input).toBeDisabled()
+    })
+  })
+
+  describe('history button', () => {
+    it('should render history button', () => {
+      render(<ResponsePanel {...defaultProps} />)
+
+      expect(screen.getByTitle('History')).toBeInTheDocument()
+    })
+  })
+
+  describe('action label', () => {
+    it('should display action label for explain', () => {
+      render(<ResponsePanel {...defaultProps} currentAction="explain" />)
+
+      expect(screen.getByText('Explanation')).toBeInTheDocument()
+    })
+
+    it('should display action label for summarize', () => {
+      render(<ResponsePanel {...defaultProps} currentAction="summarize" />)
+
+      expect(screen.getByText('Summary')).toBeInTheDocument()
+    })
+
+    it('should display action label for define', () => {
+      render(<ResponsePanel {...defaultProps} currentAction="define" />)
+
+      expect(screen.getByText('Definition')).toBeInTheDocument()
     })
   })
 })

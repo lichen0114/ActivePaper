@@ -1,5 +1,12 @@
 /// <reference types="vite/client" />
 
+type ActionType = 'explain' | 'summarize' | 'define'
+
+interface ConversationMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
 interface ProviderInfo {
   id: string
   name: string
@@ -13,6 +20,8 @@ interface Window {
       text: string,
       context: string,
       providerId?: string,
+      action?: ActionType,
+      conversationHistory?: ConversationMessage[],
       onChunk?: (chunk: string) => void,
       onDone?: () => void,
       onError?: (error: string) => void
