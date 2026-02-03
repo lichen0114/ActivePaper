@@ -15,7 +15,8 @@
       "Bash(npm install:*)",
       "Bash(npm run test:run:*)",
       "Bash(npm run test:coverage:*)",
-      "Bash(xargs cat:*)"
+      "Bash(xargs cat:*)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   }
 }

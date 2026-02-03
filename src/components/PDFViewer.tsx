@@ -158,6 +158,7 @@ function PDFViewer({ data, onError }: PDFViewerProps) {
         textLayer.className = 'textLayer'
         textLayer.style.width = `${viewport.width}px`
         textLayer.style.height = `${viewport.height}px`
+        textLayer.style.setProperty('--scale-factor', scale.toString())
         container.appendChild(textLayer)
 
         // Render text layer using new API

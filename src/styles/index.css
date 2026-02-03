@@ -50,8 +50,8 @@ body {
   top: 0;
   right: 0;
   bottom: 0;
-  overflow: hidden;
-  opacity: 0.2;
+  overflow: clip;
+  opacity: 1;
   line-height: 1.0;
 }
 
@@ -65,6 +65,21 @@ body {
 
 .textLayer ::selection {
   background: rgba(59, 130, 246, 0.5);
+}
+
+.textLayer .endOfContent {
+  display: block;
+  position: absolute;
+  inset: 100% 0 0;
+  z-index: 0;
+  cursor: default;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  user-select: none;
+}
+
+.textLayer.selecting .endOfContent {
+  top: 0;
 }
 
 .textLayer .highlight {
