@@ -25,6 +25,18 @@ function PDFViewer({ data, onError }: PDFViewerProps) {
   const [renderedPages, setRenderedPages] = useState<Set<number>>(new Set())
   const pageRefs = useRef<Map<number, HTMLDivElement>>(new Map())
   const renderingRef = useRef<Set<number>>(new Set())
+  const pdfRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null)
+  const loadingTaskRef = useRef<pdfjsLib.PDFDocumentLoadingTask | null>(null)
+  const renderTasksRef = useRef<Map<number, pdfjsLib.RenderTask>>(new Map())
+
+  // Cancel all in-flight render tasks
+  const cancelAllRenderTasks = useCallback(() => {
+    for (const [, task] of renderTasksRef.current) {
+      task.cancel()
+    }
+    renderTasksRef.current.clear()
+    renderingRef.current.clear()
+  }, [])
 
   // Load PDF document
   useEffect(() => {
@@ -32,21 +44,50 @@ function PDFViewer({ data, onError }: PDFViewerProps) {
 
     const loadPdf = async () => {
       console.log('Loading PDF, data length:', data.byteLength)
+
+      // Cancel any in-flight render tasks from previous PDF
+      cancelAllRenderTasks()
+
+      // Cancel previous loading task if still in progress
+      if (loadingTaskRef.current) {
+        loadingTaskRef.current.destroy()
+        loadingTaskRef.current = null
+      }
+
+      // Destroy previous PDF document
+      if (pdfRef.current) {
+        pdfRef.current.destroy()
+        pdfRef.current = null
+      }
+
       try {
         // Clone the ArrayBuffer to prevent detachment issues when PDF.js transfers it to the worker
         const dataClone = data.slice(0)
-        const loadingTask = pdfjsLib.getDocument({ data: dataClone })
+        const loadingTask = pdfjsLib.getDocument({
+          data: dataClone,
+          cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/cmaps/',
+          cMapPacked: true,
+        })
+        loadingTaskRef.current = loadingTask
         const pdfDoc = await loadingTask.promise
         console.log('PDF loaded, pages:', pdfDoc.numPages)
 
         if (!cancelled) {
+          pdfRef.current = pdfDoc
           setPdf(pdfDoc)
           setTotalPages(pdfDoc.numPages)
           setRenderedPages(new Set())
           renderingRef.current.clear()
           pageRefs.current.clear()
+        } else {
+          // If cancelled, destroy the loaded document
+          pdfDoc.destroy()
         }
       } catch (err) {
+        // Ignore cancellation errors
+        if (err instanceof Error && err.message.includes('destroy')) {
+          return
+        }
         const message = err instanceof Error ? err.message : 'Failed to load PDF'
         console.error('Failed to load PDF:', err)
         onError?.(message)
@@ -57,13 +98,16 @@ function PDFViewer({ data, onError }: PDFViewerProps) {
 
     return () => {
       cancelled = true
+      pageRefs.current.clear()
     }
-  }, [data])
+  }, [data, cancelAllRenderTasks])
 
   // Render a single page
   const renderPage = useCallback(
     async (pageNum: number, container: HTMLDivElement) => {
       if (!pdf || renderingRef.current.has(pageNum)) return
+      // Skip if already rendered (canvas exists)
+      if (container.querySelector('canvas')) return
 
       renderingRef.current.add(pageNum)
 
@@ -71,7 +115,7 @@ function PDFViewer({ data, onError }: PDFViewerProps) {
         const page = await pdf.getPage(pageNum)
         const viewport = page.getViewport({ scale })
 
-        // Clear container
+        // Clear container (safe now since React doesn't manage children of this element)
         container.innerHTML = ''
         container.style.width = `${viewport.width}px`
         container.style.height = `${viewport.height}px`
@@ -87,11 +131,17 @@ function PDFViewer({ data, onError }: PDFViewerProps) {
         const context = canvas.getContext('2d')!
         context.scale(window.devicePixelRatio, window.devicePixelRatio)
 
-        // Render page
-        await page.render({
+        // Render page and track the task for cancellation
+        const renderTask = page.render({
           canvasContext: context,
           viewport,
-        }).promise
+        })
+        renderTasksRef.current.set(pageNum, renderTask)
+
+        await renderTask.promise
+
+        // Remove from tracking after completion
+        renderTasksRef.current.delete(pageNum)
 
         // Create text layer
         const textContent = await page.getTextContent()
@@ -111,9 +161,14 @@ function PDFViewer({ data, onError }: PDFViewerProps) {
 
         setRenderedPages((prev) => new Set([...prev, pageNum]))
       } catch (err) {
+        // Ignore cancellation errors
+        if (err instanceof Error && err.name === 'RenderingCancelledException') {
+          return
+        }
         console.error(`Failed to render page ${pageNum}:`, err)
       } finally {
         renderingRef.current.delete(pageNum)
+        renderTasksRef.current.delete(pageNum)
       }
     },
     [pdf, scale]
@@ -190,12 +245,35 @@ function PDFViewer({ data, onError }: PDFViewerProps) {
   useEffect(() => {
     if (!pdf) return
 
+    // Cancel all in-flight render tasks before resetting
+    cancelAllRenderTasks()
+
+    // Clear PDF.js content from render targets
+    for (const container of pageRefs.current.values()) {
+      container.innerHTML = ''
+    }
+
     setRenderedPages(new Set())
-    renderingRef.current.clear()
 
     // Re-render visible pages
     setTimeout(handleScroll, 0)
-  }, [scale])
+  }, [scale, cancelAllRenderTasks])
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      cancelAllRenderTasks()
+      if (loadingTaskRef.current) {
+        loadingTaskRef.current.destroy()
+        loadingTaskRef.current = null
+      }
+      if (pdfRef.current) {
+        pdfRef.current.destroy()
+        pdfRef.current = null
+      }
+      pageRefs.current.clear()
+    }
+  }, [cancelAllRenderTasks])
 
   const zoomIn = () => setScale((s) => Math.min(s + SCALE_STEP, SCALE_MAX))
   const zoomOut = () => setScale((s) => Math.max(s - SCALE_STEP, SCALE_MIN))
@@ -273,9 +351,6 @@ function PDFViewer({ data, onError }: PDFViewerProps) {
           {Array.from({ length: totalPages }, (_, i) => i + 1).map((pageNum) => (
             <div
               key={pageNum}
-              ref={(el) => {
-                if (el) pageRefs.current.set(pageNum, el)
-              }}
               data-page-number={pageNum}
               className="pdf-page relative bg-white shadow-lg"
               style={{
@@ -283,14 +358,24 @@ function PDFViewer({ data, onError }: PDFViewerProps) {
                 minHeight: '280px',
               }}
             >
+              {/* Loading spinner - React-managed, sibling to render target */}
               {!renderedPages.has(pageNum) && (
-                <div className="absolute inset-0 flex items-center justify-center text-gray-400">
+                <div className="absolute inset-0 flex items-center justify-center text-gray-400 pointer-events-none z-0">
                   <svg className="w-8 h-8 animate-spin" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
                 </div>
               )}
+
+              {/* PDF.js render target - React does NOT manage children */}
+              <div
+                ref={(el) => {
+                  if (el) pageRefs.current.set(pageNum, el)
+                  else pageRefs.current.delete(pageNum)
+                }}
+                className="absolute inset-0"
+              />
             </div>
           ))}
         </div>

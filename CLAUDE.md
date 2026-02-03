@@ -55,7 +55,9 @@ interface AIProvider {
 }
 ```
 
-To add a new provider: implement the interface with an async generator `complete()` method, then register in `ProviderManager.initializeProviders()`.
+Current providers: `ollama` (local), `gemini`, `openai`, `anthropic` (cloud).
+
+To add a new provider: implement the interface with an async generator `complete()` method, then register in `ProviderManager.initializeProviders()`. Call `refreshProviders()` after API key changes to reinitialize providers with new keys.
 
 ### Security
 
@@ -76,7 +78,17 @@ To add a new provider: implement the interface with an async generator `complete
 
 - **PDF.js worker**: Use Vite's `?url` import suffix for worker paths (`import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url'`). This ensures correct path resolution in both dev and production builds.
 
+- **PDF.js CMap configuration**: When calling `getDocument()`, always include `cMapUrl` and `cMapPacked` for proper CJK font rendering. Use CDN: `cMapUrl: 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/cmaps/'`.
+
 - **IPC Buffer serialization**: With `contextIsolation: true`, Node.js `Buffer` objects are converted to `Uint8Array` during IPC. The main process should convert to `ArrayBuffer` before sending to avoid serialization issues.
+
+## PDF.js and React Integration
+
+PDF.js directly manipulates the DOM, which conflicts with React's virtual DOM. To avoid `removeChild` errors when React tries to unmount elements that PDF.js already removed:
+
+1. **Separate render targets**: Use a nested structure where React manages the outer container and loading states, but PDF.js renders into a dedicated child div that React never updates
+2. **Guard against re-renders**: Check `container.querySelector('canvas')` before rendering to skip already-rendered pages
+3. **Clear on scale change**: When scale changes, manually clear PDF.js containers with `innerHTML = ''` before re-rendering
 
 ## Path Aliases
 
