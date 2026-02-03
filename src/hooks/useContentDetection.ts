@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, useRef } from 'react'
 import type { ContentDetectionResult, InteractiveZone, InteractiveZoneType } from '../types/modes'
 import { detectContent } from '../services/contentDetector'
 
@@ -16,6 +16,7 @@ export function useContentDetection(options: UseContentDetectionOptions = {}) {
 
   // Store detected content per page
   const [detectedContent, setDetectedContent] = useState<Map<number, ContentDetectionResult>>(new Map())
+  const detectedContentRef = useRef<Map<number, ContentDetectionResult>>(new Map())
 
   // Store interactive zones with bounding rects
   const [zones, setZones] = useState<InteractiveZone[]>([])
@@ -27,6 +28,7 @@ export function useContentDetection(options: UseContentDetectionOptions = {}) {
     if (!enabled) return
 
     const result = detectContent(text)
+    detectedContentRef.current.set(pageNum, result)
     setDetectedContent(prev => {
       const next = new Map(prev)
       next.set(pageNum, result)
@@ -38,6 +40,7 @@ export function useContentDetection(options: UseContentDetectionOptions = {}) {
    * Clear detection results for a page
    */
   const clearPageContent = useCallback((pageNum: number) => {
+    detectedContentRef.current.delete(pageNum)
     setDetectedContent(prev => {
       const next = new Map(prev)
       next.delete(pageNum)
@@ -53,7 +56,7 @@ export function useContentDetection(options: UseContentDetectionOptions = {}) {
   const updateZoneBounds = useCallback((pageNum: number, textLayerElement: HTMLElement) => {
     if (!enabled) return
 
-    const pageContent = detectedContent.get(pageNum)
+    const pageContent = detectedContentRef.current.get(pageNum)
     if (!pageContent) return
 
     const newZones: InteractiveZone[] = []
@@ -147,7 +150,7 @@ export function useContentDetection(options: UseContentDetectionOptions = {}) {
       const otherPages = prev.filter(z => !z.id.startsWith(`page-${pageNum}-`))
       return [...otherPages, ...newZones]
     })
-  }, [enabled, detectedContent])
+  }, [enabled])
 
   /**
    * Get zones for a specific page
@@ -179,6 +182,7 @@ export function useContentDetection(options: UseContentDetectionOptions = {}) {
    * Clear all detection results
    */
   const clearAll = useCallback(() => {
+    detectedContentRef.current = new Map()
     setDetectedContent(new Map())
     setZones([])
   }, [])

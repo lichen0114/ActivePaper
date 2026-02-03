@@ -275,7 +275,7 @@ const PDFViewerInner = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFView
         renderTasksRef.current.delete(pageNum)
       }
     },
-    [pdf, scale]
+    [pdf, scale, isInvestigateMode, detectPageContent, updateZoneBounds]
   )
 
   // Handle scroll to detect visible pages
