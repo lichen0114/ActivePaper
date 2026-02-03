@@ -6,6 +6,7 @@ import SettingsModal from './components/SettingsModal'
 import SelectionPopover from './components/SelectionPopover'
 import STEMToolbar from './components/STEMToolbar'
 import ActivePaperDashboard from './components/dashboard/ActivePaperDashboard'
+import LibraryView from './components/library/LibraryView'
 import TabBar from './components/TabBar'
 import ModeIndicator from './components/modes/ModeIndicator'
 import VariableManipulationModal from './components/equation/VariableManipulationModal'
@@ -26,7 +27,7 @@ import { useBookmarks } from './hooks/useBookmarks'
 import BookmarksList from './components/highlights/BookmarksList'
 import SearchModal from './components/search/SearchModal'
 
-type AppView = 'dashboard' | 'reader'
+type AppView = 'dashboard' | 'library' | 'reader'
 
 // Inner app component that uses mode context
 function AppContent() {
@@ -539,6 +540,12 @@ function AppContent() {
               Dashboard
             </button>
             <button
+              className={`view-toggle-btn ${currentView === 'library' ? 'active' : ''}`}
+              onClick={() => setCurrentView('library')}
+            >
+              Library
+            </button>
+            <button
               className={`view-toggle-btn ${currentView === 'reader' ? 'active' : ''}`}
               onClick={() => setCurrentView('reader')}
             >
@@ -604,6 +611,12 @@ function AppContent() {
       <div className="flex-1 flex overflow-hidden">
         {currentView === 'dashboard' ? (
           <ActivePaperDashboard onOpenDocument={handleOpenDocument} />
+        ) : currentView === 'library' ? (
+          <LibraryView
+            isActive={currentView === 'library'}
+            onOpenDocument={handleOpenDocument}
+            onOpenDialog={handleNewTab}
+          />
         ) : (
           <>
             {/* PDF container - shrinks when sidebar/drawer opens */}
