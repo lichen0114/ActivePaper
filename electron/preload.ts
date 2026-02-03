@@ -20,6 +20,74 @@ export interface StreamEvent {
   error?: string
 }
 
+// Database types
+export interface Document {
+  id: string
+  filename: string
+  filepath: string
+  last_opened_at: number
+  scroll_position: number
+  total_pages: number | null
+  created_at: number
+}
+
+export interface Interaction {
+  id: string
+  document_id: string
+  action_type: ActionType
+  selected_text: string
+  page_context: string | null
+  response: string
+  page_number: number | null
+  scroll_position: number | null
+  created_at: number
+}
+
+export interface Concept {
+  id: string
+  name: string
+  created_at: number
+  total_occurrences?: number
+  document_count?: number
+}
+
+export interface ConceptGraphData {
+  nodes: Concept[]
+  links: Array<{ source: string; target: string; weight: number }>
+}
+
+export interface ReviewCard {
+  id: string
+  interaction_id: string
+  question: string
+  answer: string
+  next_review_at: number
+  interval_days: number
+  ease_factor: number
+  review_count: number
+  created_at: number
+  selected_text?: string
+  document_filename?: string
+  action_type?: string
+}
+
+export interface DailyActivityCount {
+  date: string
+  explain_count: number
+  summarize_count: number
+  define_count: number
+}
+
+export interface DocumentActivity {
+  document_id: string
+  filename: string
+  total_interactions: number
+  explain_count: number
+  summarize_count: number
+  define_count: number
+  last_interaction_at: number
+}
+
 contextBridge.exposeInMainWorld('api', {
   // AI Operations
   askAI: async (
@@ -98,31 +166,92 @@ contextBridge.exposeInMainWorld('api', {
     ipcRenderer.on('file-opened', handler)
     return () => ipcRenderer.removeListener('file-opened', handler)
   },
-})
 
-// Type declarations for window.api
-declare global {
-  interface Window {
-    api: {
-      askAI: (
-        text: string,
-        context: string,
-        providerId?: string,
-        action?: ActionType,
-        conversationHistory?: ConversationMessage[],
-        onChunk?: (chunk: string) => void,
-        onDone?: () => void,
-        onError?: (error: string) => void
-      ) => Promise<void>
-      getProviders: () => Promise<ProviderInfo[]>
-      getCurrentProvider: () => Promise<ProviderInfo | null>
-      setCurrentProvider: (providerId: string) => Promise<boolean>
-      setApiKey: (providerId: string, apiKey: string) => Promise<boolean>
-      hasApiKey: (providerId: string) => Promise<boolean>
-      deleteApiKey: (providerId: string) => Promise<boolean>
-      readFile: (filePath: string) => Promise<ArrayBuffer>
-      getFilePath: (file: File) => string
-      onFileOpened: (callback: (filePath: string) => void) => () => void
-    }
-  }
-}
+  // Database - Documents
+  getRecentDocuments: (limit?: number): Promise<Document[]> => {
+    return ipcRenderer.invoke('db:documents:recent', limit)
+  },
+
+  getOrCreateDocument: (data: { filename: string; filepath: string; total_pages?: number }): Promise<Document> => {
+    return ipcRenderer.invoke('db:documents:getOrCreate', data)
+  },
+
+  updateDocument: (data: { id: string; scroll_position?: number; total_pages?: number }): Promise<boolean> => {
+    return ipcRenderer.invoke('db:documents:update', data)
+  },
+
+  getDocumentById: (id: string): Promise<Document | null> => {
+    return ipcRenderer.invoke('db:documents:getById', id)
+  },
+
+  // Database - Interactions
+  saveInteraction: (data: {
+    document_id: string
+    action_type: ActionType
+    selected_text: string
+    page_context?: string
+    response: string
+    page_number?: number
+    scroll_position?: number
+  }): Promise<Interaction> => {
+    return ipcRenderer.invoke('db:interactions:save', data)
+  },
+
+  getInteractionsByDocument: (documentId: string): Promise<Interaction[]> => {
+    return ipcRenderer.invoke('db:interactions:byDocument', documentId)
+  },
+
+  getRecentInteractions: (limit?: number): Promise<Interaction[]> => {
+    return ipcRenderer.invoke('db:interactions:recent', limit)
+  },
+
+  getActivityByDay: (days?: number): Promise<DailyActivityCount[]> => {
+    return ipcRenderer.invoke('db:interactions:activityByDay', days)
+  },
+
+  getDocumentActivityStats: (): Promise<DocumentActivity[]> => {
+    return ipcRenderer.invoke('db:interactions:documentStats')
+  },
+
+  // Database - Concepts
+  getConceptGraph: (): Promise<ConceptGraphData> => {
+    return ipcRenderer.invoke('db:concepts:graph')
+  },
+
+  saveConcepts: (data: { conceptNames: string[]; interactionId: string; documentId: string }): Promise<Concept[]> => {
+    return ipcRenderer.invoke('db:concepts:save', data)
+  },
+
+  extractConcepts: (data: { text: string; response: string }): Promise<string[]> => {
+    return ipcRenderer.invoke('db:concepts:extract', data)
+  },
+
+  getConceptsForDocument: (documentId: string): Promise<Concept[]> => {
+    return ipcRenderer.invoke('db:concepts:forDocument', documentId)
+  },
+
+  getDocumentsForConcept: (conceptId: string): Promise<Array<{ document_id: string; filename: string; occurrence_count: number }>> => {
+    return ipcRenderer.invoke('db:concepts:documentsForConcept', conceptId)
+  },
+
+  // Database - Reviews
+  getNextReviewCard: (): Promise<ReviewCard | null> => {
+    return ipcRenderer.invoke('db:review:next')
+  },
+
+  updateReviewCard: (data: { cardId: string; quality: number }): Promise<ReviewCard | null> => {
+    return ipcRenderer.invoke('db:review:update', data)
+  },
+
+  createReviewCard: (data: { interaction_id: string; question: string; answer: string }): Promise<ReviewCard> => {
+    return ipcRenderer.invoke('db:review:create', data)
+  },
+
+  getDueReviewCount: (): Promise<number> => {
+    return ipcRenderer.invoke('db:review:dueCount')
+  },
+
+  getAllReviewCards: (): Promise<ReviewCard[]> => {
+    return ipcRenderer.invoke('db:review:all')
+  },
+})

@@ -3,6 +3,11 @@ import { fileURLToPath } from 'url'
 import path from 'path'
 import { ProviderManager } from './providers/index'
 import { KeyStore } from './security/key-store'
+import { getDatabase, closeDatabase } from './database/index'
+import * as documentsDb from './database/queries/documents'
+import * as interactionsDb from './database/queries/interactions'
+import * as conceptsDb from './database/queries/concepts'
+import * as reviewsDb from './database/queries/reviews'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -181,9 +186,128 @@ function setupIPC() {
     // Convert Buffer to ArrayBuffer for proper IPC serialization with contextIsolation
     return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
   })
+
+  // Database operations - Documents
+  ipcMain.handle('db:documents:recent', (_event, limit = 3) => {
+    return documentsDb.getRecentDocuments(limit)
+  })
+
+  ipcMain.handle('db:documents:getOrCreate', (_event, data: { filename: string; filepath: string; total_pages?: number }) => {
+    return documentsDb.getOrCreateDocument(data)
+  })
+
+  ipcMain.handle('db:documents:update', (_event, data: { id: string; scroll_position?: number; total_pages?: number }) => {
+    return documentsDb.updateDocument(data)
+  })
+
+  ipcMain.handle('db:documents:getById', (_event, id: string) => {
+    return documentsDb.getDocumentById(id)
+  })
+
+  // Database operations - Interactions
+  ipcMain.handle('db:interactions:save', (_event, data: interactionsDb.InteractionCreateInput) => {
+    return interactionsDb.saveInteraction(data)
+  })
+
+  ipcMain.handle('db:interactions:byDocument', (_event, documentId: string) => {
+    return interactionsDb.getInteractionsByDocument(documentId)
+  })
+
+  ipcMain.handle('db:interactions:recent', (_event, limit = 50) => {
+    return interactionsDb.getRecentInteractions(limit)
+  })
+
+  ipcMain.handle('db:interactions:activityByDay', (_event, days = 90) => {
+    return interactionsDb.getActivityByDay(days)
+  })
+
+  ipcMain.handle('db:interactions:documentStats', () => {
+    return interactionsDb.getDocumentActivityStats()
+  })
+
+  // Database operations - Concepts
+  ipcMain.handle('db:concepts:graph', () => {
+    return conceptsDb.getConceptGraph()
+  })
+
+  ipcMain.handle('db:concepts:save', (_event, data: { conceptNames: string[]; interactionId: string; documentId: string }) => {
+    return conceptsDb.saveConceptsForInteraction(data.conceptNames, data.interactionId, data.documentId)
+  })
+
+  ipcMain.handle('db:concepts:forDocument', (_event, documentId: string) => {
+    return conceptsDb.getConceptsForDocument(documentId)
+  })
+
+  ipcMain.handle('db:concepts:documentsForConcept', (_event, conceptId: string) => {
+    return conceptsDb.getDocumentsForConcept(conceptId)
+  })
+
+  // Database operations - Reviews
+  ipcMain.handle('db:review:next', () => {
+    return reviewsDb.getNextReviewCard()
+  })
+
+  ipcMain.handle('db:review:update', (_event, data: { cardId: string; quality: number }) => {
+    return reviewsDb.updateReviewCard(data.cardId, data.quality)
+  })
+
+  ipcMain.handle('db:review:create', (_event, data: { interaction_id: string; question: string; answer: string }) => {
+    return reviewsDb.createReviewCard(data)
+  })
+
+  ipcMain.handle('db:review:dueCount', () => {
+    return reviewsDb.getDueReviewCount()
+  })
+
+  ipcMain.handle('db:review:all', () => {
+    return reviewsDb.getAllReviewCards()
+  })
+
+  // Concept extraction using current AI provider
+  ipcMain.handle('db:concepts:extract', async (_event, { text, response }: { text: string; response: string }) => {
+    try {
+      const provider = providerManager.getCurrentProvider()
+      if (!provider) {
+        return []
+      }
+
+      const available = await provider.isAvailable()
+      if (!available) {
+        return []
+      }
+
+      const prompt = `Extract 3-5 key concepts/terms from the following text selection and AI response. Return ONLY a JSON array of strings with the concept names, nothing else. Example: ["concept1", "concept2", "concept3"]
+
+Text selection:
+"${text}"
+
+AI Response:
+"${response.slice(0, 500)}"`
+
+      let result = ''
+      for await (const chunk of provider.complete({ text: prompt })) {
+        result += chunk
+      }
+
+      // Parse the JSON array from the response
+      const match = result.match(/\[[\s\S]*?\]/)
+      if (match) {
+        const concepts = JSON.parse(match[0]) as string[]
+        return concepts.filter(c => typeof c === 'string' && c.length > 0)
+      }
+
+      return []
+    } catch (error) {
+      console.error('Error extracting concepts:', error)
+      return []
+    }
+  })
 }
 
 app.whenReady().then(() => {
+  // Initialize database
+  getDatabase()
+
   setupIPC()
   createWindow()
 
@@ -198,4 +322,8 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }
+})
+
+app.on('will-quit', () => {
+  closeDatabase()
 })

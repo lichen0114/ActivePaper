@@ -17,7 +17,9 @@
       "Bash(npm run test:coverage:*)",
       "Bash(xargs cat:*)",
       "WebFetch(domain:raw.githubusercontent.com)",
-      "Bash(npx vitest:*)"
+      "Bash(npx vitest:*)",
+      "Bash(tree:*)",
+      "Bash(npx @electron/rebuild -m .)"
     ]
   }
 }

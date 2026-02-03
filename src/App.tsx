@@ -1,15 +1,19 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import PDFViewer from './components/PDFViewer'
 import ResponsePanel from './components/ResponsePanel'
 import ProviderSwitcher from './components/ProviderSwitcher'
 import SettingsModal from './components/SettingsModal'
 import SelectionPopover from './components/SelectionPopover'
+import SynapseDashboard from './components/dashboard/SynapseDashboard'
 import { useSelection } from './hooks/useSelection'
 import { useAI } from './hooks/useAI'
 import { useConversation } from './hooks/useConversation'
 import { useHistory, type ActionType } from './hooks/useHistory'
 
+type AppView = 'dashboard' | 'reader'
+
 function App() {
+  const [currentView, setCurrentView] = useState<AppView>('dashboard')
   const [pdfFile, setPdfFile] = useState<ArrayBuffer | null>(null)
   const [fileName, setFileName] = useState<string>('')
   const [loadError, setLoadError] = useState<string | null>(null)
@@ -17,6 +21,15 @@ function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false)
   const [providerRefreshKey, setProviderRefreshKey] = useState(0)
   const [currentAction, setCurrentAction] = useState<ActionType>('explain')
+  const [currentDocumentId, setCurrentDocumentId] = useState<string | null>(null)
+
+  // Ref to track the last completed interaction for concept extraction
+  const pendingConceptExtraction = useRef<{
+    interactionId: string
+    documentId: string
+    text: string
+    response: string
+  } | null>(null)
 
   const { selectedText, pageContext, selectionRect, clearSelection } = useSelection()
   const { response, isLoading, error, askAI, clearResponse } = useAI()
@@ -27,32 +40,47 @@ function App() {
     setProviderRefreshKey(k => k + 1)
   }, [])
 
+  // Open a document from the dashboard
+  const handleOpenDocument = useCallback(async (documentFilePath: string) => {
+    if (!window.api) return
+
+    try {
+      setLoadError(null)
+      const arrayBuffer = await window.api.readFile(documentFilePath)
+      setPdfFile(arrayBuffer)
+      setFileName(documentFilePath.split('/').pop() || 'document.pdf')
+      setCurrentView('reader')
+
+      // Get or create document record
+      const doc = await window.api.getOrCreateDocument({
+        filename: documentFilePath.split('/').pop() || 'document.pdf',
+        filepath: documentFilePath,
+      })
+      setCurrentDocumentId(doc.id)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to open file'
+      setLoadError(message)
+      console.error('Failed to open file:', err)
+    }
+  }, [])
+
   // Handle file open from menu
   useEffect(() => {
     if (!window.api) return
 
-    const unsubscribe = window.api.onFileOpened(async (filePath: string) => {
-      try {
-        setLoadError(null)
-        const arrayBuffer = await window.api.readFile(filePath)
-        setPdfFile(arrayBuffer)
-        setFileName(filePath.split('/').pop() || 'document.pdf')
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Failed to open file'
-        setLoadError(message)
-        console.error('Failed to open file:', err)
-      }
+    const unsubscribe = window.api.onFileOpened(async (openedFilePath: string) => {
+      await handleOpenDocument(openedFilePath)
     })
 
     return () => unsubscribe()
-  }, [])
+  }, [handleOpenDocument])
 
   // Handle Cmd+J keyboard shortcut (default 'explain' action)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'j') {
         e.preventDefault()
-        if (selectedText) {
+        if (selectedText && currentView === 'reader') {
           handleAskAI('explain')
         }
       }
@@ -60,7 +88,7 @@ function App() {
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [selectedText, pageContext])
+  }, [selectedText, pageContext, currentView])
 
   const handleAskAI = useCallback(async (action: ActionType = 'explain') => {
     if (!selectedText) return
@@ -91,16 +119,100 @@ function App() {
     }
   }, [response])
 
-  // Save to history when response completes
+  // Save to history and database when response completes
   useEffect(() => {
     if (!isLoading && response && selectedText && conversation) {
+      // Add to in-memory history
       addEntry({
         selectedText,
         action: currentAction,
         response,
       })
+
+      // Save interaction to database
+      if (window.api && currentDocumentId) {
+        window.api.saveInteraction({
+          document_id: currentDocumentId,
+          action_type: currentAction,
+          selected_text: selectedText,
+          page_context: pageContext || undefined,
+          response,
+        }).then((interaction) => {
+          // Store for concept extraction
+          pendingConceptExtraction.current = {
+            interactionId: interaction.id,
+            documentId: currentDocumentId,
+            text: selectedText,
+            response,
+          }
+
+          // Extract concepts in background
+          extractConceptsInBackground()
+
+          // Create review card for 'explain' actions
+          if (currentAction === 'explain') {
+            createReviewCardInBackground(interaction.id, selectedText, response)
+          }
+        }).catch(err => {
+          console.error('Failed to save interaction:', err)
+        })
+      }
     }
   }, [isLoading, response])
+
+  // Extract concepts in background after interaction is saved
+  const extractConceptsInBackground = useCallback(async () => {
+    const pending = pendingConceptExtraction.current
+    if (!pending || !window.api) return
+
+    try {
+      const conceptNames = await window.api.extractConcepts({
+        text: pending.text,
+        response: pending.response,
+      })
+
+      if (conceptNames.length > 0) {
+        await window.api.saveConcepts({
+          conceptNames,
+          interactionId: pending.interactionId,
+          documentId: pending.documentId,
+        })
+      }
+    } catch (err) {
+      console.error('Failed to extract concepts:', err)
+    }
+
+    pendingConceptExtraction.current = null
+  }, [])
+
+  // Create review card in background
+  const createReviewCardInBackground = useCallback(async (
+    interactionId: string,
+    text: string,
+    aiResponse: string
+  ) => {
+    if (!window.api) return
+
+    try {
+      // Generate a question from the text
+      const question = text.length > 100
+        ? `What does this mean: "${text.slice(0, 100)}..."`
+        : `What does this mean: "${text}"`
+
+      // Use a summary of the response as the answer
+      const answer = aiResponse.length > 300
+        ? aiResponse.slice(0, 300) + '...'
+        : aiResponse
+
+      await window.api.createReviewCard({
+        interaction_id: interactionId,
+        question,
+        answer,
+      })
+    } catch (err) {
+      console.error('Failed to create review card:', err)
+    }
+  }, [])
 
   const handleFollowUp = useCallback(async (followUpText: string) => {
     if (!conversation || isLoading) return
@@ -156,16 +268,14 @@ function App() {
 
     try {
       setLoadError(null)
-      const filePath = window.api.getFilePath(file)
-      const arrayBuffer = await window.api.readFile(filePath)
-      setPdfFile(arrayBuffer)
-      setFileName(file.name)
+      const droppedFilePath = window.api.getFilePath(file)
+      await handleOpenDocument(droppedFilePath)
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to open file'
       setLoadError(message)
       console.error('Failed to open dropped file:', err)
     }
-  }, [])
+  }, [handleOpenDocument])
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault()
@@ -185,85 +295,109 @@ function App() {
       {/* Title bar / Top bar */}
       <div className="app-titlebar flex items-center justify-between px-4 bg-gray-800 border-b border-gray-700">
         <div className="flex items-center gap-3 pl-16">
-          <span className="text-sm text-gray-400 truncate max-w-md">
-            {fileName || 'AI PDF Reader'}
-          </span>
+          {/* View toggle */}
+          <div className="view-toggle">
+            <button
+              className={`view-toggle-btn ${currentView === 'dashboard' ? 'active' : ''}`}
+              onClick={() => setCurrentView('dashboard')}
+            >
+              Dashboard
+            </button>
+            <button
+              className={`view-toggle-btn ${currentView === 'reader' ? 'active' : ''}`}
+              onClick={() => setCurrentView('reader')}
+            >
+              Reader
+            </button>
+          </div>
+
+          {currentView === 'reader' && fileName && (
+            <span className="text-sm text-gray-400 truncate max-w-md">
+              {fileName}
+            </span>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <ProviderSwitcher onSettingsClick={() => setIsSettingsOpen(true)} refreshKey={providerRefreshKey} />
         </div>
       </div>
 
-      {/* Main content area - horizontal flex */}
+      {/* Main content area */}
       <div className="flex-1 flex overflow-hidden">
-        {/* PDF container - shrinks when sidebar opens */}
-        <div
-          className={`flex-1 relative overflow-hidden transition-all duration-300 ${isPanelOpen ? 'mr-[400px]' : ''}`}
-          onDrop={handleDrop}
-          onDragOver={handleDragOver}
-        >
-          {pdfFile ? (
-            <PDFViewer data={pdfFile} onError={(msg) => setLoadError(msg)} />
-          ) : (
-            <div className="h-full flex flex-col items-center justify-center text-gray-500">
-              <svg
-                className="w-24 h-24 mb-4 text-gray-600"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={1}
-                  d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                />
-              </svg>
-              <p className="text-lg mb-2">Drop a PDF file here</p>
-              <p className="text-sm">or use File - Open</p>
+        {currentView === 'dashboard' ? (
+          <SynapseDashboard onOpenDocument={handleOpenDocument} />
+        ) : (
+          <>
+            {/* PDF container - shrinks when sidebar opens */}
+            <div
+              className={`flex-1 relative overflow-hidden transition-all duration-300 ${isPanelOpen ? 'mr-[400px]' : ''}`}
+              onDrop={handleDrop}
+              onDragOver={handleDragOver}
+            >
+              {pdfFile ? (
+                <PDFViewer data={pdfFile} onError={(msg) => setLoadError(msg)} />
+              ) : (
+                <div className="h-full flex flex-col items-center justify-center text-gray-500">
+                  <svg
+                    className="w-24 h-24 mb-4 text-gray-600"
+                    fill="none"
+                    stroke="currentColor"
+                    viewBox="0 0 24 24"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={1}
+                      d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+                    />
+                  </svg>
+                  <p className="text-lg mb-2">Drop a PDF file here</p>
+                  <p className="text-sm">or use File - Open</p>
+                </div>
+              )}
+
+              {/* Error display */}
+              {loadError && (
+                <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-red-900/90 text-red-200 px-4 py-2 rounded-lg shadow-lg text-sm flex items-center gap-2 max-w-md">
+                  <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  <span className="truncate">{loadError}</span>
+                  <button
+                    onClick={() => setLoadError(null)}
+                    className="ml-2 p-1 hover:bg-red-800 rounded"
+                  >
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                    </svg>
+                  </button>
+                </div>
+              )}
+
+              {/* Selection toolbar */}
+              <SelectionPopover
+                selectionRect={selectionRect}
+                onAction={handleAskAI}
+                isVisible={!!selectedText && !isPanelOpen}
+              />
             </div>
-          )}
 
-          {/* Error display */}
-          {loadError && (
-            <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-red-900/90 text-red-200 px-4 py-2 rounded-lg shadow-lg text-sm flex items-center gap-2 max-w-md">
-              <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-              <span className="truncate">{loadError}</span>
-              <button
-                onClick={() => setLoadError(null)}
-                className="ml-2 p-1 hover:bg-red-800 rounded"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
-            </div>
-          )}
-
-          {/* Selection toolbar */}
-          <SelectionPopover
-            selectionRect={selectionRect}
-            onAction={handleAskAI}
-            isVisible={!!selectedText && !isPanelOpen}
-          />
-        </div>
-
-        {/* Response sidebar */}
-        <ResponsePanel
-          isOpen={isPanelOpen}
-          response={response}
-          isLoading={isLoading}
-          error={error}
-          selectedText={conversation?.selectedText || selectedText}
-          messages={displayMessages}
-          onClose={handleClosePanel}
-          onFollowUp={handleFollowUp}
-          history={history}
-          onHistorySelect={handleHistorySelect}
-          currentAction={currentAction}
-        />
+            {/* Response sidebar */}
+            <ResponsePanel
+              isOpen={isPanelOpen}
+              response={response}
+              isLoading={isLoading}
+              error={error}
+              selectedText={conversation?.selectedText || selectedText}
+              messages={displayMessages}
+              onClose={handleClosePanel}
+              onFollowUp={handleFollowUp}
+              history={history}
+              onHistorySelect={handleHistorySelect}
+              currentAction={currentAction}
+            />
+          </>
+        )}
       </div>
 
       {/* Settings modal */}
