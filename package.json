@@ -1,5 +1,5 @@
 {
-  "name": "ai-pdf-reader",
+  "name": "activepaper",
   "version": "1.0.0",
   "type": "module",
   "description": "Local-first AI PDF reader with Ollama and cloud provider support",
@@ -48,8 +48,8 @@
     "vitest": "^4.0.18"
   },
   "build": {
-    "appId": "com.ai-pdf-reader.app",
-    "productName": "AI PDF Reader",
+    "appId": "com.activepaper.app",
+    "productName": "ActivePaper",
     "directories": {
       "output": "release"
     },

@@ -4,11 +4,11 @@ import ConceptConstellation from './ConceptConstellation'
 import StruggleHeatmap from './StruggleHeatmap'
 import SpacedRepetitionDock from './SpacedRepetitionDock'
 
-interface SynapseDashboardProps {
+interface ActivePaperDashboardProps {
   onOpenDocument: (filepath: string) => void
 }
 
-export default function SynapseDashboard({ onOpenDocument }: SynapseDashboardProps) {
+export default function ActivePaperDashboard({ onOpenDocument }: ActivePaperDashboardProps) {
   const {
     recentDocuments,
     documentStats,

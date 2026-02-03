@@ -3,7 +3,7 @@ import { app } from 'electron'
 import * as path from 'path'
 import { runMigrations } from './migrations'
 
-const DB_FILE = 'synapse.db'
+const DB_FILE = 'activepaper.db'
 
 let db: Database.Database | null = null
 

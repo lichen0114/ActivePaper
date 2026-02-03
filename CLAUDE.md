@@ -25,7 +25,7 @@ Tests use Vitest with jsdom environment. Test files are in `tests/` mirroring th
 
 ## Architecture
 
-AI PDF Reader is an Electron + React desktop app that lets users select text in PDFs and get AI-powered explanations via multiple providers. It includes a metacognitive "Synapse Dashboard" for tracking learning activity.
+ActivePaper is an Electron + React desktop app that lets users select text in PDFs and get AI-powered explanations via multiple providers. It includes a metacognitive "ActivePaper Dashboard" for tracking learning activity.
 
 ### Process Model
 
@@ -72,7 +72,7 @@ To add a new provider: implement the interface with an async generator `complete
 
 ### Database Layer
 
-SQLite database (`synapse.db` in userData) via better-sqlite3 for persistent learning analytics:
+SQLite database (`activepaper.db` in userData) via better-sqlite3 for persistent learning analytics:
 
 - **`electron/database/index.ts`** - Connection management (singleton pattern)
 - **`electron/database/migrations.ts`** - Schema versioning and migrations
@@ -105,7 +105,7 @@ Schema relationships: documents → interactions → concepts (via junction tabl
 
 The app has two main views toggled via the title bar:
 
-**Dashboard View** (`SynapseDashboard`):
+**Dashboard View** (`ActivePaperDashboard`):
 - 70/30 grid layout
 - Left: Context Priming Cards (3 recent docs) + Concept Constellation (force graph)
 - Right: Struggle Heatmap (activity viz) + Spaced Repetition Dock (flashcards)

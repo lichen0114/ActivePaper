@@ -19,7 +19,8 @@
       "WebFetch(domain:raw.githubusercontent.com)",
       "Bash(npx vitest:*)",
       "Bash(tree:*)",
-      "Bash(npx @electron/rebuild -m .)"
+      "Bash(npx @electron/rebuild -m .)",
+      "Bash(gtimeout 15 npm run dev:*)"
     ]
   }
 }

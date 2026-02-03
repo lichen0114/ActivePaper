@@ -4,7 +4,7 @@ import ResponsePanel from './components/ResponsePanel'
 import ProviderSwitcher from './components/ProviderSwitcher'
 import SettingsModal from './components/SettingsModal'
 import SelectionPopover from './components/SelectionPopover'
-import SynapseDashboard from './components/dashboard/SynapseDashboard'
+import ActivePaperDashboard from './components/dashboard/ActivePaperDashboard'
 import TabBar from './components/TabBar'
 import { useSelection } from './hooks/useSelection'
 import { useAI } from './hooks/useAI'
@@ -379,7 +379,7 @@ function App() {
       {/* Main content area */}
       <div className="flex-1 flex overflow-hidden">
         {currentView === 'dashboard' ? (
-          <SynapseDashboard onOpenDocument={handleOpenDocument} />
+          <ActivePaperDashboard onOpenDocument={handleOpenDocument} />
         ) : (
           <>
             {/* PDF container - shrinks when sidebar opens */}

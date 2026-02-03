@@ -1,4 +1,4 @@
-# AI PDF Reader
+# ActivePaper
 
 **AI-powered PDF reader with local and cloud AI support**
 
@@ -37,7 +37,7 @@ Download the latest release for your platform from the [Releases](../../releases
 ```bash
 # Clone the repository
 git clone <repository-url>
-cd ai-pdf-reader
+cd activepaper
 
 # Install dependencies
 npm install
@@ -104,7 +104,7 @@ To obtain API keys:
 ```bash
 # Clone and install
 git clone <repository-url>
-cd ai-pdf-reader
+cd activepaper
 npm install
 ```
 
@@ -129,7 +129,7 @@ npx vitest run tests/path/to/file    # Run specific test file
 ### Project Structure
 
 ```
-ai-pdf-reader/
+activepaper/
 ├── electron/           # Main process code
 │   ├── main.ts         # Electron main entry
 │   ├── preload.ts      # Context bridge for IPC
