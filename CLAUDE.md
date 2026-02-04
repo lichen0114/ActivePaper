@@ -21,7 +21,12 @@ npx vitest run tests/path/to/file    # Run a specific test file
 npx vitest run -t "test name"        # Run tests matching a pattern
 ```
 
-Tests use Vitest with jsdom environment. Test files are in `tests/` mirroring the source structure. MSW is used for mocking HTTP requests to AI provider APIs.
+Tests use Vitest with jsdom environment (default) or node environment for database tests. Test files are in `tests/` mirroring the source structure. MSW is used for mocking HTTP requests to AI provider APIs.
+
+**Test Infrastructure**:
+- `tests/mocks/database.ts` - In-memory SQLite utilities (`createTestDatabase()`, `seedTestData()`)
+- `tests/mocks/window-api.ts` - Mock `window.api` IPC methods for renderer tests
+- Database query tests require `@vitest-environment node` directive at file top
 
 ## Architecture
 
@@ -251,9 +256,10 @@ For proper text selection behavior, the `.textLayer` element requires:
 The PDF viewer uses virtualized rendering (only visible pages + buffer are rendered). Key pattern to avoid render cascades:
 
 - Use a **ref** (`renderedPagesRef`) for synchronous render tracking in scroll handlers and render guards
-- Use **state** (`renderedPages`) only for UI updates (hiding loading spinners)
+- Use **state** (`renderedPages`) only for UI updates (hiding skeleton placeholders)
 - Update the ref *before* updating state to prevent duplicate renders within the same tick
 - Keep `renderedPages` state out of `handleScroll` dependencies to avoid scroll listener recreation
+- **Scroll-direction-aware buffering**: Buffer zones adjust based on scroll direction (2.5x ahead, 0.5x behind when scrolling down; reversed when scrolling up)
 
 **Zoom scroll adjustment**: When scale changes, `scrollTop` must be adjusted proportionally (`scrollTop * newScale / prevScale`) to maintain the same viewport position.
 
@@ -293,6 +299,7 @@ Heavy components use refs to avoid callback recreation that causes unnecessary r
 ### Memory Management
 - **Tab cleanup**: `closeTab` sets `tab.pdfData = null` before removal to free 10-100MB per PDF
 - **Text content LRU cache**: `PDFViewer` limits `textContentCache` to 50 pages with LRU eviction
+- **Canvas LRU cache**: `PDFViewer` caches up to 15 rendered canvases (`canvasCacheRef`) for instant scroll-back to previously viewed pages. Cache is cleared on scale change or PDF change.
 - **History bound**: `useHistory` limits array to 100 entries
 
 ### Code Splitting

@@ -85,6 +85,16 @@ const PDFViewerInner = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFView
   const textContentCache = useRef<Map<number, string>>(new Map())
   const textCacheOrderRef = useRef<number[]>([])
   const MAX_TEXT_CACHE_SIZE = 50
+
+  // Canvas LRU cache - keep rendered canvases in memory for instant scroll-back
+  const canvasCacheRef = useRef<Map<number, { canvas: HTMLCanvasElement; textLayer: HTMLDivElement }>>(new Map())
+  const canvasCacheOrderRef = useRef<number[]>([])
+  const MAX_CANVAS_CACHE_SIZE = 15 // ~30-150MB depending on page size
+
+  // Scroll direction tracking for smarter pre-rendering
+  const lastScrollTopRef = useRef(0)
+  const scrollDirectionRef = useRef<'down' | 'up'>('down')
+
   const renderingRef = useRef<Set<number>>(new Set())
   const renderedPagesRef = useRef<Set<number>>(new Set())
   const pdfRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null)
@@ -312,6 +322,9 @@ const PDFViewerInner = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFView
           pageRefs.current.clear()
           textLayerRefs.current.clear()
           textContentCache.current.clear()
+          // Clear canvas cache for new PDF
+          canvasCacheRef.current.clear()
+          canvasCacheOrderRef.current = []
           renderScaleRef.current = scale
         } else {
           // If cancelled, destroy the loaded document
@@ -344,6 +357,40 @@ const PDFViewerInner = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFView
       if (!currentPdf || renderingRef.current.has(pageNum)) return
       // Skip if already rendered (canvas exists)
       if (container.querySelector('canvas')) return
+
+      // Check canvas cache first - instant restore for previously rendered pages
+      const cached = canvasCacheRef.current.get(pageNum)
+      if (cached && renderScaleRef.current === currentScale) {
+        container.innerHTML = ''
+        const clonedCanvas = cached.canvas.cloneNode(true) as HTMLCanvasElement
+        const ctx = clonedCanvas.getContext('2d')
+        ctx?.drawImage(cached.canvas, 0, 0) // Copy pixel data
+        container.appendChild(clonedCanvas)
+
+        const clonedTextLayer = cached.textLayer.cloneNode(true) as HTMLDivElement
+        container.appendChild(clonedTextLayer)
+        textLayerRefs.current.set(pageNum, clonedTextLayer)
+
+        // Update dimensions
+        container.style.width = clonedCanvas.style.width
+        container.style.height = clonedCanvas.style.height
+        const parentDiv = container.parentElement
+        if (parentDiv) {
+          parentDiv.style.width = clonedCanvas.style.width
+          parentDiv.style.height = clonedCanvas.style.height
+        }
+
+        // Update LRU order
+        const existingIdx = canvasCacheOrderRef.current.indexOf(pageNum)
+        if (existingIdx !== -1) {
+          canvasCacheOrderRef.current.splice(existingIdx, 1)
+        }
+        canvasCacheOrderRef.current.push(pageNum)
+
+        renderedPagesRef.current.add(pageNum)
+        setRenderedPages(prev => new Set([...prev, pageNum]))
+        return
+      }
 
       renderingRef.current.add(pageNum)
 
@@ -417,6 +464,31 @@ const PDFViewerInner = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFView
           })
         }
 
+        // Cache the rendered canvas and text layer for instant scroll-back
+        const canvasClone = document.createElement('canvas')
+        canvasClone.width = canvas.width
+        canvasClone.height = canvas.height
+        canvasClone.style.width = canvas.style.width
+        canvasClone.style.height = canvas.style.height
+        const cloneCtx = canvasClone.getContext('2d')
+        cloneCtx?.drawImage(canvas, 0, 0)
+
+        const textLayerClone = textLayer.cloneNode(true) as HTMLDivElement
+
+        // LRU cache management
+        const existingIdx = canvasCacheOrderRef.current.indexOf(pageNum)
+        if (existingIdx !== -1) {
+          canvasCacheOrderRef.current.splice(existingIdx, 1)
+        }
+        canvasCacheOrderRef.current.push(pageNum)
+
+        while (canvasCacheOrderRef.current.length > MAX_CANVAS_CACHE_SIZE) {
+          const oldest = canvasCacheOrderRef.current.shift()
+          if (oldest !== undefined) canvasCacheRef.current.delete(oldest)
+        }
+
+        canvasCacheRef.current.set(pageNum, { canvas: canvasClone, textLayer: textLayerClone })
+
         // Update ref immediately (synchronous tracking)
         renderedPagesRef.current.add(pageNum)
         // Update state for UI (triggers spinner hide)
@@ -444,6 +516,11 @@ const PDFViewerInner = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFView
     const containerHeight = container.clientHeight
     const currentTotalPages = totalPagesRef.current
 
+    // Track scroll direction for smarter pre-rendering
+    const direction = scrollTop > lastScrollTopRef.current ? 'down' : 'up'
+    scrollDirectionRef.current = direction
+    lastScrollTopRef.current = scrollTop
+
     // Find current page based on scroll position
     let accumulatedHeight = 0
     for (let i = 1; i <= currentTotalPages; i++) {
@@ -458,9 +535,13 @@ const PDFViewerInner = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFView
       }
     }
 
-    // Render visible pages
-    const visibleStart = scrollTop - containerHeight
-    const visibleEnd = scrollTop + containerHeight * 2
+    // Adjust buffer based on scroll direction - pre-render more in the direction of travel
+    const bufferAbove = direction === 'down' ? containerHeight * 0.5 : containerHeight * 1.5
+    const bufferBelow = direction === 'down' ? containerHeight * 2.5 : containerHeight * 1.5
+
+    // Render visible pages with direction-aware buffering
+    const visibleStart = scrollTop - bufferAbove
+    const visibleEnd = scrollTop + containerHeight + bufferBelow
 
     accumulatedHeight = 0
     for (let i = 1; i <= currentTotalPages; i++) {
@@ -619,6 +700,10 @@ const PDFViewerInner = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFView
       if (Math.abs(scale - renderScaleRef.current) < 0.01) return
 
       cancelAllRenderTasks()
+
+      // Clear canvas cache (invalidated by scale change)
+      canvasCacheRef.current.clear()
+      canvasCacheOrderRef.current = []
 
       // Clear PDF.js content and reset transforms
       for (const container of pageRefs.current.values()) {
@@ -815,13 +900,26 @@ const PDFViewerInner = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFView
                 minHeight: '280px',
               }}
             >
-              {/* Loading spinner - React-managed, sibling to render target */}
+              {/* Skeleton placeholder - React-managed, sibling to render target */}
               {!renderedPages.has(pageNum) && (
-                <div className="absolute inset-0 flex items-center justify-center text-gray-400 pointer-events-none z-0">
-                  <svg className="w-8 h-8 animate-spin" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-                  </svg>
+                <div className="absolute inset-0 bg-white p-8 pointer-events-none z-0">
+                  <div className="space-y-3">
+                    <div className="h-3 bg-gray-200 rounded w-3/4 animate-pulse" />
+                    <div className="h-3 bg-gray-200 rounded w-full animate-pulse" />
+                    <div className="h-3 bg-gray-200 rounded w-5/6 animate-pulse" />
+                    <div className="h-3 bg-gray-200 rounded w-2/3 animate-pulse" />
+                  </div>
+                  <div className="mt-8 space-y-3">
+                    <div className="h-3 bg-gray-200 rounded w-full animate-pulse" />
+                    <div className="h-3 bg-gray-200 rounded w-4/5 animate-pulse" />
+                    <div className="h-3 bg-gray-200 rounded w-full animate-pulse" />
+                    <div className="h-3 bg-gray-200 rounded w-1/2 animate-pulse" />
+                  </div>
+                  <div className="mt-8 space-y-3">
+                    <div className="h-3 bg-gray-200 rounded w-2/3 animate-pulse" />
+                    <div className="h-3 bg-gray-200 rounded w-full animate-pulse" />
+                    <div className="h-3 bg-gray-200 rounded w-3/4 animate-pulse" />
+                  </div>
                 </div>
               )}
 

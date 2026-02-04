@@ -22,7 +22,9 @@
       "Bash(npx @electron/rebuild -m .)",
       "Bash(gtimeout 15 npm run dev:*)",
       "Bash(xargs:*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(npm rebuild:*)",
+      "Bash(tee:*)"
     ]
   }
 }
