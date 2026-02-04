@@ -1,18 +1,35 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
-import PDFViewer from './components/PDFViewer'
+import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
+import PDFViewer, { type PDFViewerRef } from './components/PDFViewer'
 import ResponsePanel from './components/ResponsePanel'
 import ProviderSwitcher from './components/ProviderSwitcher'
 import SettingsModal from './components/SettingsModal'
 import SelectionPopover from './components/SelectionPopover'
 import STEMToolbar from './components/STEMToolbar'
-import ActivePaperDashboard from './components/dashboard/ActivePaperDashboard'
 import LibraryView from './components/library/LibraryView'
 import TabBar from './components/TabBar'
 import ModeIndicator from './components/modes/ModeIndicator'
-import VariableManipulationModal from './components/equation/VariableManipulationModal'
-import CodeSandboxDrawer from './components/code/CodeSandboxDrawer'
-import ConceptStackPanel from './components/explainer/ConceptStackPanel'
 import { ModeProvider } from './contexts/ModeContext'
+
+// Lazy load heavy components that include large dependencies (recharts, force-graph, pyodide)
+const ActivePaperDashboard = lazy(() => import('./components/dashboard/ActivePaperDashboard'))
+const VariableManipulationModal = lazy(() => import('./components/equation/VariableManipulationModal'))
+const CodeSandboxDrawer = lazy(() => import('./components/code/CodeSandboxDrawer'))
+const ConceptStackPanel = lazy(() => import('./components/explainer/ConceptStackPanel'))
+
+// Loading fallback component
+function LoadingFallback({ label }: { label?: string }) {
+  return (
+    <div className="h-full flex items-center justify-center text-gray-500">
+      <div className="flex flex-col items-center">
+        <svg className="w-8 h-8 animate-spin mb-2" fill="none" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+        </svg>
+        {label && <span className="text-sm">{label}</span>}
+      </div>
+    </div>
+  )
+}
 import { useSelection } from './hooks/useSelection'
 import { useAI } from './hooks/useAI'
 import { useConversation } from './hooks/useConversation'
@@ -26,6 +43,9 @@ import { useHighlights } from './hooks/useHighlights'
 import { useBookmarks } from './hooks/useBookmarks'
 import BookmarksList from './components/highlights/BookmarksList'
 import SearchModal from './components/search/SearchModal'
+import DocumentNavigator from './components/navigation/DocumentNavigator'
+import type { PDFOutlineItem } from './types/pdf'
+import type { PDFSearchMatch } from './hooks/useSearch'
 
 type AppView = 'dashboard' | 'library' | 'reader'
 
@@ -47,6 +67,7 @@ function AppContent() {
     closeTab,
     selectTab,
     updateTab,
+    reloadTab,
     selectPreviousTab,
     selectNextTab,
     selectTabByIndex,
@@ -60,6 +81,45 @@ function AppContent() {
     text: string
     response: string
   } | null>(null)
+
+  // Refs for stable keyboard handler - avoids 17+ dependencies causing listener recreation
+  const keyboardStateRef = useRef({
+    selectedText: '',
+    currentView: 'dashboard' as AppView,
+    tabsLength: 0,
+    isPanelOpen: false,
+    equationIsOpen: false,
+    codeSandboxIsOpen: false,
+    codeSandboxIsRunning: false,
+    conceptStackIsOpen: false,
+    conceptStackCardsLength: 0,
+  })
+  // Initialize with placeholder functions - will be updated in effect after hooks are called
+  const keyboardCallbacksRef = useRef<{
+    equationOpenEquation: (latex: string) => void
+    equationCloseEquation: () => void
+    codeSandboxRunCode: () => void
+    codeSandboxCloseSandbox: () => void
+    conceptStackPopCard: () => void
+    conceptStackCloseStack: () => void
+    selectPreviousTab: () => void
+    selectNextTab: () => void
+    selectTabByIndex: (index: number) => void
+    handleAskAI: (action: ActionType) => void
+    handleClosePanel: () => void
+  }>({
+    equationOpenEquation: () => {},
+    equationCloseEquation: () => {},
+    codeSandboxRunCode: () => {},
+    codeSandboxCloseSandbox: () => {},
+    conceptStackPopCard: () => {},
+    conceptStackCloseStack: () => {},
+    selectPreviousTab: () => {},
+    selectNextTab: () => {},
+    selectTabByIndex: () => {},
+    handleAskAI: () => {},
+    handleClosePanel: () => {},
+  })
 
   const { selectedText, pageContext, selectionRect, pageNumber, startOffset, endOffset, clearSelection } = useSelection()
   const { response, isLoading, error, askAI, clearResponse } = useAI()
@@ -83,6 +143,13 @@ function AppContent() {
       listConversations(activeTab.documentId)
     }
   }, [activeTab?.documentId, listConversations])
+
+  useEffect(() => {
+    if (!activeTab) {
+      setIsNavigatorOpen(false)
+      setIsBookmarksOpen(false)
+    }
+  }, [activeTab])
 
   // Equation engine
   const equationEngine = useEquationEngine({
@@ -118,6 +185,12 @@ function AppContent() {
 
   const [isBookmarksOpen, setIsBookmarksOpen] = useState(false)
   const [isSearchOpen, setIsSearchOpen] = useState(false)
+  const [isNavigatorOpen, setIsNavigatorOpen] = useState(false)
+  const [currentPage, setCurrentPage] = useState(1)
+  const [activeTotalPages, setActiveTotalPages] = useState(0)
+  const [outline, setOutline] = useState<PDFOutlineItem[]>([])
+  const viewerRefs = useRef<Map<string, PDFViewerRef>>(new Map())
+  const [activeViewer, setActiveViewer] = useState<PDFViewerRef | null>(null)
 
   // Create Set from bookmarks for efficient lookup
   const bookmarkedPages = new Set(bookmarks.map(b => b.page_number))
@@ -132,11 +205,23 @@ function AppContent() {
   }, [selectedText, pageNumber, startOffset, endOffset, createHighlight, clearSelection])
 
   // Handle bookmark click from bookmark list
-  const handleBookmarkClick = useCallback((_bookmarkPageNumber: number) => {
+  const handleBookmarkClick = useCallback((bookmarkPageNumber: number) => {
     // Close bookmarks panel and navigate
     setIsBookmarksOpen(false)
-    // TODO: Add ref to PDFViewer to call goToPage
+    activeViewer?.goToPage(bookmarkPageNumber)
+  }, [activeViewer])
+
+  const handlePageChange = useCallback((pageNumber: number) => {
+    setCurrentPage(pageNumber)
   }, [])
+
+  const handleTotalPagesChange = useCallback((totalPages: number) => {
+    setActiveTotalPages(totalPages)
+  }, [])
+
+  const handleJumpToPage = useCallback((pageNumber: number) => {
+    activeViewer?.goToPage(pageNumber)
+  }, [activeViewer])
 
   // Handle zone click in investigate mode
   const handleZoneClick = useCallback((zone: import('./types/modes').InteractiveZone) => {
@@ -156,6 +241,17 @@ function AppContent() {
   const handleKeyChange = useCallback(() => {
     setProviderRefreshKey(k => k + 1)
   }, [])
+
+  const attachViewerRef = useCallback((tabId: string) => (instance: PDFViewerRef | null) => {
+    if (instance) {
+      viewerRefs.current.set(tabId, instance)
+    } else {
+      viewerRefs.current.delete(tabId)
+    }
+    if (tabId === activeTabId) {
+      setActiveViewer(instance)
+    }
+  }, [activeTabId])
 
   // Open a document (from dashboard, menu, or drag-drop)
   const handleOpenDocument = useCallback(async (documentFilePath: string) => {
@@ -189,34 +285,54 @@ function AppContent() {
     return () => unsubscribe()
   }, [currentView, closeCurrentTab])
 
-  // Handle keyboard shortcuts
+  // Keep keyboard state ref in sync
+  useEffect(() => {
+    keyboardStateRef.current = {
+      selectedText,
+      currentView,
+      tabsLength: tabs.length,
+      isPanelOpen,
+      equationIsOpen: equationEngine.isOpen,
+      codeSandboxIsOpen: codeSandbox.isOpen,
+      codeSandboxIsRunning: codeSandbox.isRunning,
+      conceptStackIsOpen: conceptStack.isOpen,
+      conceptStackCardsLength: conceptStack.cards.length,
+    }
+  }, [selectedText, currentView, tabs.length, isPanelOpen,
+      equationEngine.isOpen, codeSandbox.isOpen, codeSandbox.isRunning,
+      conceptStack.isOpen, conceptStack.cards.length])
+
+  // Handle keyboard shortcuts - empty deps, uses refs for state
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      const state = keyboardStateRef.current
+      const callbacks = keyboardCallbacksRef.current
+
       // Escape - close simulation mode, panels, or concept stack
       if (e.key === 'Escape') {
-        if (equationEngine.isOpen) {
+        if (state.equationIsOpen) {
           e.preventDefault()
-          equationEngine.closeEquation()
+          callbacks.equationCloseEquation()
           return
         }
-        if (codeSandbox.isOpen) {
+        if (state.codeSandboxIsOpen) {
           e.preventDefault()
-          codeSandbox.closeSandbox()
+          callbacks.codeSandboxCloseSandbox()
           return
         }
-        if (conceptStack.isOpen) {
+        if (state.conceptStackIsOpen) {
           e.preventDefault()
           // Pop one card or close if only one
-          if (conceptStack.cards.length > 1) {
-            conceptStack.popCard()
+          if (state.conceptStackCardsLength > 1) {
+            callbacks.conceptStackPopCard()
           } else {
-            conceptStack.closeStack()
+            callbacks.conceptStackCloseStack()
           }
           return
         }
-        if (isPanelOpen) {
+        if (state.isPanelOpen) {
           e.preventDefault()
-          handleClosePanel()
+          callbacks.handleClosePanel()
           return
         }
       }
@@ -224,24 +340,24 @@ function AppContent() {
       // Cmd+E for equation explorer (when text selected)
       if ((e.metaKey || e.ctrlKey) && e.key === 'e' && !e.shiftKey) {
         e.preventDefault()
-        if (selectedText && currentView === 'reader') {
-          equationEngine.openEquation(selectedText)
+        if (state.selectedText && state.currentView === 'reader') {
+          callbacks.equationOpenEquation(state.selectedText)
         }
       }
 
       // Cmd+R for run code (when code sandbox open)
       if ((e.metaKey || e.ctrlKey) && e.key === 'r' && !e.shiftKey) {
-        if (codeSandbox.isOpen && !codeSandbox.isRunning) {
+        if (state.codeSandboxIsOpen && !state.codeSandboxIsRunning) {
           e.preventDefault()
-          codeSandbox.runCode()
+          callbacks.codeSandboxRunCode()
         }
       }
 
       // Cmd+J for explain
       if ((e.metaKey || e.ctrlKey) && e.key === 'j') {
         e.preventDefault()
-        if (selectedText && currentView === 'reader') {
-          handleAskAI('explain')
+        if (state.selectedText && state.currentView === 'reader') {
+          callbacks.handleAskAI('explain')
         }
       }
 
@@ -258,36 +374,71 @@ function AppContent() {
       }
 
       // Tab navigation shortcuts (only in reader view with tabs)
-      if (currentView === 'reader' && tabs.length > 0) {
+      if (state.currentView === 'reader' && state.tabsLength > 0) {
         // Cmd+Shift+[ for previous tab
         if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === '[') {
           e.preventDefault()
-          selectPreviousTab()
+          callbacks.selectPreviousTab()
         }
         // Cmd+Shift+] for next tab
         if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === ']') {
           e.preventDefault()
-          selectNextTab()
+          callbacks.selectNextTab()
         }
         // Cmd+1-9 for tab by index
         if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key >= '1' && e.key <= '9') {
           e.preventDefault()
           const index = parseInt(e.key) - 1
-          selectTabByIndex(index)
+          callbacks.selectTabByIndex(index)
         }
       }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [
-    selectedText, pageContext, currentView, tabs.length,
-    selectPreviousTab, selectNextTab, selectTabByIndex,
-    isPanelOpen,
-    equationEngine.isOpen, equationEngine.openEquation, equationEngine.closeEquation,
-    codeSandbox.isOpen, codeSandbox.isRunning, codeSandbox.runCode, codeSandbox.closeSandbox,
-    conceptStack.isOpen, conceptStack.cards.length, conceptStack.popCard, conceptStack.closeStack,
-  ])
+  }, []) // Empty deps - handler uses refs for current state
+
+  // Keep callbacks ref in sync for keyboard handler
+  useEffect(() => {
+    keyboardCallbacksRef.current = {
+      equationOpenEquation: equationEngine.openEquation,
+      equationCloseEquation: equationEngine.closeEquation,
+      codeSandboxRunCode: codeSandbox.runCode,
+      codeSandboxCloseSandbox: codeSandbox.closeSandbox,
+      conceptStackPopCard: conceptStack.popCard,
+      conceptStackCloseStack: conceptStack.closeStack,
+      selectPreviousTab,
+      selectNextTab,
+      selectTabByIndex,
+      handleAskAI: (action: ActionType) => {
+        if (!selectedText) return
+        setIsPanelOpen(true)
+        setCurrentAction(action)
+        clearResponse()
+        clearConversation()
+        const documentId = activeTab?.documentId
+        if (documentId) {
+          startConversation(selectedText, pageContext || '', documentId).then(() => {
+            addMessage('user', selectedText, action)
+            addMessage('assistant', '')
+            askAI(selectedText, pageContext, action)
+          })
+        } else {
+          startConversation(selectedText, pageContext || '', '').then(() => {
+            addMessage('user', selectedText, action)
+            addMessage('assistant', '')
+            askAI(selectedText, pageContext, action)
+          })
+        }
+      },
+      handleClosePanel: () => {
+        setIsPanelOpen(false)
+        clearSelection()
+        clearResponse()
+        clearConversation()
+      },
+    }
+  })
 
   const handleAskAI = useCallback(async (action: ActionType = 'explain') => {
     if (!selectedText) return
@@ -517,6 +668,112 @@ function AppContent() {
     closeTab(tabId)
   }, [activeTabId, closeTab, clearResponse, clearConversation])
 
+  useEffect(() => {
+    if (!activeTabId) {
+      setActiveViewer(null)
+      return
+    }
+    setActiveViewer(viewerRefs.current.get(activeTabId) || null)
+  }, [activeTabId])
+
+  useEffect(() => {
+    if (activeViewer) {
+      setCurrentPage(activeViewer.getCurrentPage())
+      setActiveTotalPages(activeViewer.getTotalPages())
+    } else {
+      setCurrentPage(1)
+      setActiveTotalPages(0)
+    }
+  }, [activeViewer, activeTabId])
+
+  useEffect(() => {
+    let cancelled = false
+    const loadOutline = async () => {
+      if (!isNavigatorOpen || !activeViewer) {
+        setOutline([])
+        return
+      }
+      const items = await activeViewer.getOutline()
+      if (!cancelled) {
+        setOutline(items)
+      }
+    }
+    loadOutline()
+    return () => {
+      cancelled = true
+    }
+  }, [activeViewer, activeTabId, isNavigatorOpen])
+
+  const searchCurrentPdf = useCallback(async (query: string): Promise<PDFSearchMatch[]> => {
+    const viewer = activeViewer
+    if (!viewer) return []
+    const trimmed = query.trim()
+    if (!trimmed) return []
+
+    const normalizedQuery = trimmed.toLowerCase()
+    const totalPages = viewer.getTotalPages()
+    const matches: PDFSearchMatch[] = []
+    const maxMatches = 200
+    const concurrency = Math.min(4, Math.max(1, totalPages))
+    let nextPage = 1
+
+    const buildSnippet = (text: string, index: number, length: number) => {
+      const start = Math.max(0, index - 40)
+      const end = Math.min(text.length, index + length + 60)
+      const snippet = text.slice(start, end)
+      return `${start > 0 ? '…' : ''}${snippet}${end < text.length ? '…' : ''}`
+    }
+
+    const searchWorker = async () => {
+      while (nextPage <= totalPages && matches.length < maxMatches) {
+        const pageNumber = nextPage
+        nextPage += 1
+        const pageText = await viewer.getPageText(pageNumber)
+        if (!pageText) continue
+        const lower = pageText.toLowerCase()
+        let idx = 0
+        while ((idx = lower.indexOf(normalizedQuery, idx)) !== -1) {
+          matches.push({
+            kind: 'text',
+            pageNumber,
+            text: buildSnippet(pageText, idx, normalizedQuery.length),
+            index: idx,
+          })
+          idx += normalizedQuery.length
+          if (matches.length >= maxMatches) break
+        }
+      }
+    }
+
+    await Promise.all(Array.from({ length: concurrency }, () => searchWorker()))
+
+    const annotationMatches = highlights
+      .filter((h) => {
+        const textMatch = h.selected_text.toLowerCase().includes(normalizedQuery)
+        const noteMatch = (h.note || '').toLowerCase().includes(normalizedQuery)
+        return textMatch || noteMatch
+      })
+      .map((h) => ({
+        kind: 'annotation' as const,
+        pageNumber: h.page_number,
+        text: h.selected_text.length > 180 ? `${h.selected_text.slice(0, 180)}…` : h.selected_text,
+        index: h.start_offset,
+        highlightId: h.id,
+        note: h.note,
+        color: h.color,
+      }))
+
+    const combined = [...matches, ...annotationMatches]
+    combined.sort((a, b) => {
+      if (a.pageNumber === b.pageNumber) {
+        return a.index - b.index
+      }
+      return a.pageNumber - b.pageNumber
+    })
+
+    return combined.slice(0, maxMatches)
+  }, [activeViewer, highlights])
+
   // Get messages for display (use conversation messages or response for display)
   const displayMessages = conversation?.messages.map((msg, idx) => {
     // For the last assistant message, use the streaming response
@@ -565,6 +822,23 @@ function AppContent() {
         )}
 
         <div className="flex items-center gap-2">
+          {/* Navigator button - only show in reader view */}
+          {currentView === 'reader' && activeTab && (
+            <button
+              onClick={() => setIsNavigatorOpen(prev => !prev)}
+              className={`p-1.5 rounded transition-colors ${
+                isNavigatorOpen
+                  ? 'bg-blue-600/30 text-blue-300'
+                  : 'hover:bg-gray-700/50 text-gray-400 hover:text-gray-200'
+              }`}
+              title="Navigator"
+            >
+              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h10" />
+              </svg>
+            </button>
+          )}
+
           {/* Search button */}
           <button
             onClick={() => setIsSearchOpen(true)}
@@ -610,7 +884,9 @@ function AppContent() {
       {/* Main content area */}
       <div className="flex-1 flex overflow-hidden">
         {currentView === 'dashboard' ? (
-          <ActivePaperDashboard onOpenDocument={handleOpenDocument} />
+          <Suspense fallback={<LoadingFallback label="Loading dashboard..." />}>
+            <ActivePaperDashboard onOpenDocument={handleOpenDocument} />
+          </Suspense>
         ) : currentView === 'library' ? (
           <LibraryView
             isActive={currentView === 'library'}
@@ -621,18 +897,44 @@ function AppContent() {
           <>
             {/* PDF container - shrinks when sidebar/drawer opens */}
             <div
-              className={`flex-1 relative overflow-hidden transition-all duration-300 ${isPanelOpen || conceptStack.isOpen ? 'mr-[400px]' : ''} ${codeSandbox.isOpen ? 'mb-[35vh]' : ''}`}
+              className={`flex-1 relative overflow-hidden transition-all duration-300 ${isNavigatorOpen ? 'pl-[288px]' : ''} ${isPanelOpen || conceptStack.isOpen ? 'mr-[400px]' : ''} ${codeSandbox.isOpen ? 'mb-[35vh]' : ''}`}
               onDrop={handleDrop}
               onDragOver={handleDragOver}
             >
+              <DocumentNavigator
+                isOpen={isNavigatorOpen}
+                documentKey={activeTab?.id ?? null}
+                totalPages={activeTotalPages}
+                outline={outline}
+                highlights={highlights}
+                currentPage={currentPage}
+                onJumpToPage={handleJumpToPage}
+                onClose={() => setIsNavigatorOpen(false)}
+                getThumbnail={activeViewer?.renderThumbnail}
+              />
               {/* Render all PDFViewers but show/hide based on active tab */}
               {tabs.map(tab => (
                 <div
                   key={tab.id}
                   className={tab.id === activeTabId ? 'block h-full' : 'hidden'}
                 >
-                  {tab.pdfData ? (
+                  {tab.loadError ? (
+                    <div className="h-full flex flex-col items-center justify-center text-gray-400">
+                      <svg className="w-16 h-16 mb-4 text-red-500/60" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                      </svg>
+                      <p className="text-lg mb-2">Failed to open PDF</p>
+                      <p className="text-sm text-gray-500 max-w-md text-center px-4">{tab.loadError}</p>
+                      <button
+                        onClick={() => reloadTab(tab.id)}
+                        className="mt-4 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm rounded-lg transition-colors"
+                      >
+                        Try Again
+                      </button>
+                    </div>
+                  ) : tab.pdfData ? (
                     <PDFViewer
+                      ref={attachViewerRef(tab.id)}
                       data={tab.pdfData}
                       initialScrollPosition={tab.scrollPosition}
                       initialScale={tab.scale}
@@ -644,6 +946,8 @@ function AppContent() {
                       onDeleteHighlight={tab.id === activeTabId ? deleteHighlight : undefined}
                       bookmarkedPages={tab.id === activeTabId ? bookmarkedPages : new Set()}
                       onToggleBookmark={tab.id === activeTabId ? toggleBookmark : undefined}
+                      onPageChange={tab.id === activeTabId ? handlePageChange : undefined}
+                      onTotalPagesChange={tab.id === activeTabId ? handleTotalPagesChange : undefined}
                       mode={tab.id === activeTabId ? mode : 'reading'}
                       onZoneClick={tab.id === activeTabId ? handleZoneClick : undefined}
                     />
@@ -655,7 +959,14 @@ function AppContent() {
                       </svg>
                       <p className="text-sm">Loading PDF...</p>
                     </div>
-                  ) : null}
+                  ) : (
+                    <div className="h-full flex flex-col items-center justify-center text-gray-500">
+                      <svg className="w-16 h-16 mb-4 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                      <p className="text-sm">No PDF loaded</p>
+                    </div>
+                  )}
                 </div>
               ))}
 
@@ -677,24 +988,6 @@ function AppContent() {
                   </svg>
                   <p className="text-lg mb-2">Drop a PDF file here</p>
                   <p className="text-sm">or use File - Open (Cmd+O)</p>
-                </div>
-              )}
-
-              {/* Error display */}
-              {activeTab?.loadError && (
-                <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-red-900/90 text-red-200 px-4 py-2 rounded-lg shadow-lg text-sm flex items-center gap-2 max-w-md">
-                  <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  <span className="truncate">{activeTab.loadError}</span>
-                  <button
-                    onClick={() => updateTab(activeTab.id, { loadError: null })}
-                    className="ml-2 p-1 hover:bg-red-800 rounded"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                    </svg>
-                  </button>
                 </div>
               )}
 
@@ -735,7 +1028,7 @@ function AppContent() {
             <BookmarksList
               isOpen={isBookmarksOpen}
               bookmarks={bookmarks}
-              currentPage={1}
+              currentPage={currentPage}
               onBookmarkClick={handleBookmarkClick}
               onBookmarkDelete={deleteBookmark}
               onClose={() => setIsBookmarksOpen(false)}
@@ -757,6 +1050,8 @@ function AppContent() {
         documentId={activeTab?.documentId}
         onClose={() => setIsSearchOpen(false)}
         onOpenDocument={handleOpenDocument}
+        onSearchPdf={searchCurrentPdf}
+        onJumpToPage={handleJumpToPage}
       />
 
       {/* Mode indicator - only in reader view */}
@@ -764,52 +1059,64 @@ function AppContent() {
         <ModeIndicator mode={mode} simulationType={simulationType} />
       )}
 
-      {/* Equation manipulation modal */}
-      <VariableManipulationModal
-        isOpen={equationEngine.isOpen}
-        originalLatex={equationEngine.originalLatex}
-        parsedEquation={equationEngine.parsedEquation}
-        isParsing={equationEngine.isParsing}
-        error={equationEngine.error}
-        graphData={equationEngine.graphData}
-        graphIndependentVar={equationEngine.graphIndependentVar}
-        currentResult={equationEngine.currentResult}
-        onClose={equationEngine.closeEquation}
-        onUpdateVariable={equationEngine.updateVariable}
-        onSetGraphVariable={equationEngine.setGraphIndependentVar}
-      />
+      {/* Equation manipulation modal - lazy loaded with recharts */}
+      {equationEngine.isOpen && (
+        <Suspense fallback={<LoadingFallback />}>
+          <VariableManipulationModal
+            isOpen={equationEngine.isOpen}
+            originalLatex={equationEngine.originalLatex}
+            parsedEquation={equationEngine.parsedEquation}
+            isParsing={equationEngine.isParsing}
+            error={equationEngine.error}
+            graphData={equationEngine.graphData}
+            graphIndependentVar={equationEngine.graphIndependentVar}
+            currentResult={equationEngine.currentResult}
+            onClose={equationEngine.closeEquation}
+            onUpdateVariable={equationEngine.updateVariable}
+            onSetGraphVariable={equationEngine.setGraphIndependentVar}
+          />
+        </Suspense>
+      )}
 
-      {/* Code sandbox drawer */}
-      <CodeSandboxDrawer
-        isOpen={codeSandbox.isOpen}
-        code={codeSandbox.editedCode}
-        runtime={codeSandbox.runtime}
-        output={codeSandbox.output}
-        isRunning={codeSandbox.isRunning}
-        isRuntimeReady={codeSandbox.isRuntimeReady}
-        isLoadingRuntime={codeSandbox.isLoadingRuntime}
-        error={codeSandbox.error}
-        onClose={codeSandbox.closeSandbox}
-        onCodeChange={codeSandbox.updateCode}
-        onRuntimeChange={codeSandbox.setRuntime}
-        onRun={codeSandbox.runCode}
-        onStop={codeSandbox.stopCode}
-        onClear={codeSandbox.clearOutput}
-        onReset={codeSandbox.resetCode}
-      />
+      {/* Code sandbox drawer - lazy loaded with pyodide */}
+      {codeSandbox.isOpen && (
+        <Suspense fallback={<LoadingFallback />}>
+          <CodeSandboxDrawer
+            isOpen={codeSandbox.isOpen}
+            code={codeSandbox.editedCode}
+            runtime={codeSandbox.runtime}
+            output={codeSandbox.output}
+            isRunning={codeSandbox.isRunning}
+            isRuntimeReady={codeSandbox.isRuntimeReady}
+            isLoadingRuntime={codeSandbox.isLoadingRuntime}
+            error={codeSandbox.error}
+            onClose={codeSandbox.closeSandbox}
+            onCodeChange={codeSandbox.updateCode}
+            onRuntimeChange={codeSandbox.setRuntime}
+            onRun={codeSandbox.runCode}
+            onStop={codeSandbox.stopCode}
+            onClear={codeSandbox.clearOutput}
+            onReset={codeSandbox.resetCode}
+          />
+        </Suspense>
+      )}
 
-      {/* Concept stack panel (first principles explainer) */}
-      <ConceptStackPanel
-        isOpen={conceptStack.isOpen}
-        cards={conceptStack.cards}
-        breadcrumbs={conceptStack.breadcrumbs}
-        isLoading={conceptStack.isLoading}
-        error={conceptStack.error}
-        onTermClick={conceptStack.pushCard}
-        onNavigate={conceptStack.popToIndex}
-        onClose={conceptStack.closeStack}
-        onBack={conceptStack.popCard}
-      />
+      {/* Concept stack panel (first principles explainer) - lazy loaded */}
+      {conceptStack.isOpen && (
+        <Suspense fallback={<LoadingFallback />}>
+          <ConceptStackPanel
+            isOpen={conceptStack.isOpen}
+            cards={conceptStack.cards}
+            breadcrumbs={conceptStack.breadcrumbs}
+            isLoading={conceptStack.isLoading}
+            error={conceptStack.error}
+            onTermClick={conceptStack.pushCard}
+            onNavigate={conceptStack.popToIndex}
+            onClose={conceptStack.closeStack}
+            onBack={conceptStack.popCard}
+          />
+        </Suspense>
+      )}
     </div>
   )
 }

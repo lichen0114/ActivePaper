@@ -4,6 +4,7 @@ import path from 'path'
 import { ProviderManager } from './providers/index'
 import { KeyStore } from './security/key-store'
 import { getDatabase, closeDatabase } from './database/index'
+import { verifyAndRepairSchema } from './database/migrations'
 import * as documentsDb from './database/queries/documents'
 import * as interactionsDb from './database/queries/interactions'
 import * as conceptsDb from './database/queries/concepts'
@@ -19,6 +20,13 @@ const DIST = path.join(__dirname, '../dist')
 
 let mainWindow: BrowserWindow | null = null
 let providerManager: ProviderManager
+
+// Provider availability cache with TTL
+const providerAvailabilityCache = new Map<string, { available: boolean; timestamp: number }>()
+const AVAILABILITY_CACHE_TTL = 30000 // 30 seconds
+
+// Stream management for cancellation support
+const activeStreams = new Map<string, AbortController>()
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -114,7 +122,7 @@ function createMenu() {
 function setupIPC() {
   providerManager = new ProviderManager()
 
-  // AI Query handler with streaming
+  // AI Query handler with streaming, buffering, and cancellation support
   ipcMain.handle('ai:query', async (_event, { text, context, providerId, action, conversationHistory }) => {
     try {
       const provider = providerManager.getProvider(providerId)
@@ -130,19 +138,58 @@ function setupIPC() {
       // Return a channel ID for streaming
       const channelId = `ai:stream:${Date.now()}`
 
-      // Start streaming in background
+      // Create abort controller for cancellation
+      const abortController = new AbortController()
+      activeStreams.set(channelId, abortController)
+
+      // Start streaming in background with IPC chunk buffering
       ;(async () => {
         try {
           const stream = provider.complete({ text, context, action, conversationHistory })
-          for await (const chunk of stream) {
-            mainWindow?.webContents.send(channelId, { type: 'chunk', data: chunk })
+
+          // Buffer chunks for 50ms or 500 chars before flushing to reduce IPC overhead
+          let buffer = ''
+          let lastFlush = Date.now()
+          const BUFFER_SIZE = 500
+          const BUFFER_TIME = 50
+
+          const flush = () => {
+            if (buffer.length > 0) {
+              mainWindow?.webContents.send(channelId, { type: 'chunk', data: buffer })
+              buffer = ''
+              lastFlush = Date.now()
+            }
           }
-          mainWindow?.webContents.send(channelId, { type: 'done' })
+
+          for await (const chunk of stream) {
+            // Check for cancellation
+            if (abortController.signal.aborted) {
+              break
+            }
+
+            buffer += chunk
+
+            // Flush if buffer is large enough or enough time has passed
+            if (buffer.length >= BUFFER_SIZE || Date.now() - lastFlush >= BUFFER_TIME) {
+              flush()
+            }
+          }
+
+          // Flush any remaining content
+          flush()
+
+          if (!abortController.signal.aborted) {
+            mainWindow?.webContents.send(channelId, { type: 'done' })
+          }
         } catch (err) {
-          mainWindow?.webContents.send(channelId, {
-            type: 'error',
-            error: err instanceof Error ? err.message : 'Unknown error'
-          })
+          if (!abortController.signal.aborted) {
+            mainWindow?.webContents.send(channelId, {
+              type: 'error',
+              error: err instanceof Error ? err.message : 'Unknown error'
+            })
+          }
+        } finally {
+          activeStreams.delete(channelId)
         }
       })()
 
@@ -152,16 +199,46 @@ function setupIPC() {
     }
   })
 
-  // Provider status
+  // Cancel streaming request
+  ipcMain.handle('ai:cancel', async (_event, channelId: string) => {
+    const controller = activeStreams.get(channelId)
+    if (controller) {
+      controller.abort()
+      activeStreams.delete(channelId)
+      return true
+    }
+    return false
+  })
+
+  // Provider status with availability caching
   ipcMain.handle('provider:list', async () => {
     const providers = providerManager.getAllProviders()
+    const now = Date.now()
+
     const statuses = await Promise.all(
-      providers.map(async (p) => ({
-        id: p.id,
-        name: p.name,
-        type: p.type,
-        available: await p.isAvailable(),
-      }))
+      providers.map(async (p) => {
+        // Check cache first
+        const cached = providerAvailabilityCache.get(p.id)
+        if (cached && now - cached.timestamp < AVAILABILITY_CACHE_TTL) {
+          return {
+            id: p.id,
+            name: p.name,
+            type: p.type,
+            available: cached.available,
+          }
+        }
+
+        // Cache miss - check availability
+        const available = await p.isAvailable()
+        providerAvailabilityCache.set(p.id, { available, timestamp: now })
+
+        return {
+          id: p.id,
+          name: p.name,
+          type: p.type,
+          available,
+        }
+      })
     )
     return statuses
   })
@@ -179,6 +256,8 @@ function setupIPC() {
   ipcMain.handle('keys:set', async (_event, { providerId, apiKey }) => {
     await KeyStore.setKey(providerId, apiKey)
     providerManager.refreshProviders()
+    // Invalidate availability cache for this provider
+    providerAvailabilityCache.delete(providerId)
     return true
   })
 
@@ -428,7 +507,8 @@ AI Response:
 
 app.whenReady().then(() => {
   // Initialize database
-  getDatabase()
+  const database = getDatabase()
+  verifyAndRepairSchema(database)
 
   setupIPC()
   createWindow()

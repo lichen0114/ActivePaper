@@ -97,7 +97,8 @@ Schema relationships: documents → interactions → concepts (via junction tabl
 ### Key IPC Channels
 
 - `ai:query` - Start streaming AI query (returns `channelId` for streaming responses)
-- `provider:list/getCurrent/setCurrent` - Provider management
+- `ai:cancel` - Cancel an ongoing stream by channelId
+- `provider:list/getCurrent/setCurrent` - Provider management (list uses 30s availability cache)
 - `keys:set/has/delete` - API key management
 - `file:read` - Read file from disk (returns `ArrayBuffer`, not `Buffer`)
 - `db:documents:*` - Document CRUD operations
@@ -111,12 +112,16 @@ Schema relationships: documents → interactions → concepts (via junction tabl
 
 ### UI Layout
 
-The app has two main views toggled via the title bar:
+The app has three main views toggled via the title bar:
 
 **Dashboard View** (`ActivePaperDashboard`):
 - 70/30 grid layout
 - Left: Context Priming Cards (3 recent docs) + Concept Constellation (force graph)
 - Right: Struggle Heatmap (activity viz) + Spaced Repetition Dock (flashcards)
+
+**Library View** (`LibraryView`):
+- Shows all documents in the database
+- Click a document to open it in Reader view
 
 **Reader View**:
 - PDF container: Flexes to fill available space, gets `mr-[400px]` margin when sidebar opens
@@ -129,8 +134,9 @@ The app has two main views toggled via the title bar:
 Multiple PDFs can be open simultaneously in tabs. Key design decisions:
 
 - **All PDFViewers stay mounted**: Instead of using `key={activeTab.id}` which would force remounting, render all tabs with `tabs.map()` and use `className={tab.id === activeTabId ? 'block h-full' : 'hidden'}` to show/hide. This enables instant tab switching without PDF re-rendering.
-- **State per tab**: Each tab stores its own `pdfData`, `scrollPosition`, `scale`, and `documentId` via `useTabs` hook
+- **State per tab**: Each tab stores its own `pdfData`, `scrollPosition`, `scale`, `documentId`, `isLoading`, and `loadError` via `useTabs` hook
 - **Keyboard navigation**: Cmd+Shift+[ / ] for prev/next tab, Cmd+1-9 for direct tab access
+- **Error handling**: Render condition checks `loadError` FIRST before `pdfData` to ensure error UI always shows. Stale tabs (with `loadError` set) are removed and recreated when reopening the same file.
 
 ### Keyboard Shortcuts
 
@@ -198,7 +204,7 @@ Bookmarks are page-level markers with optional labels, shown as indicators in th
 - `useAI` - Manages AI query state, streaming responses, supports action types and conversation history
 - `useConversation` - Persistent conversation threads with database storage
 - `useHistory` - Tracks session query history (in-memory, cleared on app restart)
-- `useTabs` - Tab state management (open, close, select, update tabs with per-tab scroll/scale)
+- `useTabs` - Tab state management (open, close, select, update, reload tabs with per-tab scroll/scale/error state)
 - `useDashboard` - Fetches all dashboard data (recent docs, stats, concepts, review count)
 - `useReviewCards` - Review card state, flip, and rating actions
 - `useConceptGraph` - Concept graph data with node selection
@@ -264,3 +270,47 @@ Configured in both `vite.config.ts` and `vitest.config.ts`:
 - `src/types/equation.ts` - Equation engine types
 - `src/types/code.ts` - Code sandbox types
 - `src/types/explainer.ts` - Concept stack types
+- `src/types/tabs.ts` - Tab state types
+- `src/types/pdf.ts` - PDF outline and navigation types
+
+## Performance Patterns
+
+### AI Streaming
+The `useAI` hook uses array accumulation with RAF batching to avoid O(n²) string concatenation:
+```typescript
+const chunksRef = useRef<string[]>([])
+// In onChunk: chunksRef.current.push(chunk), then batch with requestAnimationFrame
+// Final response: chunksRef.current.join('')
+```
+
+### React Callback Stability
+Heavy components use refs to avoid callback recreation that causes unnecessary re-renders:
+- **PDFViewer**: `scaleRef`, `totalPagesRef` for stable `renderPage` and `handleScroll`
+- **useTabs**: `tabsRef`, `activeTabIdRef` for stable tab operations
+- **App.tsx**: `keyboardStateRef`, `keyboardCallbacksRef` for stable keyboard handler (avoids 17+ dependencies)
+- **ModeContext**: Refs for state in event handlers with empty `[]` deps
+
+### Memory Management
+- **Tab cleanup**: `closeTab` sets `tab.pdfData = null` before removal to free 10-100MB per PDF
+- **Text content LRU cache**: `PDFViewer` limits `textContentCache` to 50 pages with LRU eviction
+- **History bound**: `useHistory` limits array to 100 entries
+
+### Code Splitting
+Heavy components are lazy-loaded to reduce initial bundle (83 kB gzip vs ~486 kB):
+- `ActivePaperDashboard` (includes recharts, force-graph)
+- `VariableManipulationModal` (recharts)
+- `CodeSandboxDrawer`
+- `ConceptStackPanel`
+
+Wrap with `<Suspense fallback={...}>` and conditionally render only when `isOpen`.
+
+### IPC Optimization
+- **Chunk buffering**: AI streaming buffers chunks for 50ms or 500 chars before IPC send
+- **Provider cache**: `provider:list` caches availability for 30 seconds
+- **Batch DB operations**: `saveConceptsForInteraction` runs all queries in single transaction
+
+### Database Indexes
+Critical indexes for performance (added in migration1):
+- `idx_interaction_concepts_concept` - concept junction lookups
+- `idx_document_concepts_concept` - document-concept lookups
+- `idx_concepts_name_lower` - case-insensitive concept name queries

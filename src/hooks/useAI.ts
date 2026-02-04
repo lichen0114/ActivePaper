@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import type { ActionType } from './useHistory'
 import type { Message } from './useConversation'
 
@@ -15,6 +15,10 @@ export function useAI() {
     error: null,
   })
 
+  // Use array accumulation to avoid O(n²) string concatenation
+  const chunksRef = useRef<string[]>([])
+  const rafScheduledRef = useRef(false)
+
   const askAI = useCallback(async (
     text: string,
     context?: string,
@@ -30,6 +34,10 @@ export function useAI() {
       return
     }
 
+    // Reset chunks accumulator
+    chunksRef.current = []
+    rafScheduledRef.current = false
+
     setState({
       response: '',
       isLoading: true,
@@ -43,12 +51,19 @@ export function useAI() {
         undefined, // Use current provider
         action,
         conversationHistory,
-        // onChunk
+        // onChunk - use RAF batching to avoid O(n²) string concatenation
         (chunk) => {
-          setState((prev) => ({
-            ...prev,
-            response: prev.response + chunk,
-          }))
+          chunksRef.current.push(chunk)
+          if (!rafScheduledRef.current) {
+            rafScheduledRef.current = true
+            requestAnimationFrame(() => {
+              setState((prev) => ({
+                ...prev,
+                response: chunksRef.current.join(''),
+              }))
+              rafScheduledRef.current = false
+            })
+          }
         },
         // onDone
         () => {

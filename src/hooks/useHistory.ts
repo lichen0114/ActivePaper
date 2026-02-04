@@ -10,6 +10,9 @@ export interface HistoryEntry {
   response: string
 }
 
+// Maximum history size to prevent unbounded memory growth
+const MAX_HISTORY_SIZE = 100
+
 export function useHistory() {
   const [history, setHistory] = useState<HistoryEntry[]>([])
 
@@ -18,7 +21,7 @@ export function useHistory() {
       ...entry,
       id: crypto.randomUUID(),
       timestamp: Date.now()
-    }, ...prev])
+    }, ...prev].slice(0, MAX_HISTORY_SIZE))
   }, [])
 
   const getEntry = useCallback((id: string) => {

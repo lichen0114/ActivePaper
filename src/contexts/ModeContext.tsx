@@ -1,4 +1,4 @@
-import { createContext, useContext, useState, useCallback, useEffect, type ReactNode } from 'react'
+import { createContext, useContext, useState, useCallback, useEffect, useRef, type ReactNode } from 'react'
 import type { UIMode, SimulationType, ModeContextValue } from '../types/modes'
 
 const ModeContext = createContext<ModeContextValue | null>(null)
@@ -12,13 +12,26 @@ export function ModeProvider({ children }: ModeProviderProps) {
   const [simulationType, setSimulationType] = useState<SimulationType>(null)
   const [isAltPressed, setIsAltPressed] = useState(false)
 
-  // Track Alt/Option key for investigate mode
+  // Use refs to avoid dependency loop in event handlers
+  const modeRef = useRef(mode)
+  const isAltPressedRef = useRef(isAltPressed)
+
+  // Keep refs in sync with state
+  useEffect(() => {
+    modeRef.current = mode
+  }, [mode])
+
+  useEffect(() => {
+    isAltPressedRef.current = isAltPressed
+  }, [isAltPressed])
+
+  // Track Alt/Option key for investigate mode - empty deps array to avoid listener recreation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Alt' || e.key === 'Option') {
         setIsAltPressed(true)
         // Only switch to investigate if not in simulation mode
-        if (mode !== 'simulation') {
+        if (modeRef.current !== 'simulation') {
           setMode('investigate')
         }
       }
@@ -28,7 +41,7 @@ export function ModeProvider({ children }: ModeProviderProps) {
       if (e.key === 'Alt' || e.key === 'Option') {
         setIsAltPressed(false)
         // Return to reading mode only if not in simulation
-        if (mode === 'investigate') {
+        if (modeRef.current === 'investigate') {
           setMode('reading')
         }
       }
@@ -36,9 +49,9 @@ export function ModeProvider({ children }: ModeProviderProps) {
 
     // Handle blur (when window loses focus while Alt is held)
     const handleBlur = () => {
-      if (isAltPressed) {
+      if (isAltPressedRef.current) {
         setIsAltPressed(false)
-        if (mode === 'investigate') {
+        if (modeRef.current === 'investigate') {
           setMode('reading')
         }
       }
@@ -53,7 +66,7 @@ export function ModeProvider({ children }: ModeProviderProps) {
       window.removeEventListener('keyup', handleKeyUp)
       window.removeEventListener('blur', handleBlur)
     }
-  }, [mode, isAltPressed])
+  }, []) // Empty deps - handlers use refs for current state
 
   const enterInvestigateMode = useCallback(() => {
     if (mode !== 'simulation') {

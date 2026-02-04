@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, memo } from 'react'
 import type { ActionType } from '../hooks/useHistory'
 import {
   containsLatex,
@@ -44,7 +44,7 @@ function Divider() {
   return <div className="w-px h-5 bg-gray-600/50 mx-1" />
 }
 
-export default function SelectionPopover({
+const SelectionPopover = memo(function SelectionPopover({
   selectionRect,
   selectedText = '',
   onAction,
@@ -230,4 +230,6 @@ export default function SelectionPopover({
       )}
     </div>
   )
-}
+})
+
+export default SelectionPopover

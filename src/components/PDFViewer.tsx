@@ -8,6 +8,7 @@ import InteractiveZoneOverlay from './modes/InteractiveZoneOverlay'
 import type { HighlightData } from '../hooks/useHighlights'
 import { useContentDetection } from '../hooks/useContentDetection'
 import type { InteractiveZone, UIMode } from '../types/modes'
+import type { PDFOutlineItem } from '../types/pdf'
 
 // Set worker source using Vite's ?url import for reliable path resolution
 pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorkerUrl
@@ -21,7 +22,11 @@ export interface TextLayerInfo {
 export interface PDFViewerRef {
   goToPage: (page: number) => void
   getCurrentPage: () => number
+  getTotalPages: () => number
   getTextLayerInfo: (pageNumber: number) => TextLayerInfo | null
+  getPageText: (pageNumber: number) => Promise<string | null>
+  getOutline: () => Promise<PDFOutlineItem[]>
+  renderThumbnail: (pageNumber: number, targetWidth?: number) => Promise<string | null>
 }
 
 interface PDFViewerProps {
@@ -36,6 +41,8 @@ interface PDFViewerProps {
   onDeleteHighlight?: (id: string) => void
   bookmarkedPages?: Set<number>
   onToggleBookmark?: (pageNumber: number) => void
+  onPageChange?: (pageNumber: number) => void
+  onTotalPagesChange?: (totalPages: number) => void
   // Investigate mode
   mode?: UIMode
   onZoneClick?: (zone: InteractiveZone) => void
@@ -58,6 +65,8 @@ const PDFViewerInner = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFView
   onDeleteHighlight,
   bookmarkedPages = new Set(),
   onToggleBookmark,
+  onPageChange,
+  onTotalPagesChange,
   mode = 'reading',
   onZoneClick,
 }, ref) {
@@ -69,9 +78,13 @@ const PDFViewerInner = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFView
   const [currentPage, setCurrentPage] = useState(1)
   const [totalPages, setTotalPages] = useState(0)
   const [renderedPages, setRenderedPages] = useState<Set<number>>(new Set())
+  const [pageInput, setPageInput] = useState('1')
   const pageRefs = useRef<Map<number, HTMLDivElement>>(new Map())
   const textLayerRefs = useRef<Map<number, HTMLDivElement>>(new Map())
+  // LRU text content cache - limit to 50 pages to prevent memory growth on large PDFs
   const textContentCache = useRef<Map<number, string>>(new Map())
+  const textCacheOrderRef = useRef<number[]>([])
+  const MAX_TEXT_CACHE_SIZE = 50
   const renderingRef = useRef<Set<number>>(new Set())
   const renderedPagesRef = useRef<Set<number>>(new Set())
   const pdfRef = useRef<pdfjsLib.PDFDocumentProxy | null>(null)
@@ -81,6 +94,17 @@ const PDFViewerInner = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFView
   const renderScaleRef = useRef(SCALE_DEFAULT)
   const prevScaleRef = useRef(SCALE_DEFAULT)
   const pdfContainerRef = useRef<HTMLDivElement>(null)
+  const scaleRef = useRef(scale)
+  const totalPagesRef = useRef(totalPages)
+
+  // Keep refs in sync for stable callbacks
+  useEffect(() => {
+    scaleRef.current = scale
+  }, [scale])
+
+  useEffect(() => {
+    totalPagesRef.current = totalPages
+  }, [totalPages])
 
   // Content detection for investigate mode
   const isInvestigateMode = mode === 'investigate'
@@ -91,10 +115,136 @@ const PDFViewerInner = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFView
     clearAll: clearContentDetection,
   } = useContentDetection({ enabled: isInvestigateMode })
 
+  // Helper to add to text cache with LRU eviction
+  const addToTextCache = useCallback((pageNumber: number, text: string) => {
+    // If already in cache, move to end (most recently used)
+    const existingIndex = textCacheOrderRef.current.indexOf(pageNumber)
+    if (existingIndex !== -1) {
+      textCacheOrderRef.current.splice(existingIndex, 1)
+    }
+    textCacheOrderRef.current.push(pageNumber)
+
+    // Evict oldest entries if cache is too large
+    while (textCacheOrderRef.current.length > MAX_TEXT_CACHE_SIZE) {
+      const oldest = textCacheOrderRef.current.shift()
+      if (oldest !== undefined) {
+        textContentCache.current.delete(oldest)
+      }
+    }
+
+    textContentCache.current.set(pageNumber, text)
+  }, [])
+
+  const getPageText = useCallback(async (pageNumber: number): Promise<string | null> => {
+    const cached = textContentCache.current.get(pageNumber)
+    if (cached) {
+      // Move to end of LRU order
+      const index = textCacheOrderRef.current.indexOf(pageNumber)
+      if (index !== -1) {
+        textCacheOrderRef.current.splice(index, 1)
+        textCacheOrderRef.current.push(pageNumber)
+      }
+      return cached
+    }
+    const doc = pdfRef.current
+    if (!doc) return null
+    try {
+      const page = await doc.getPage(pageNumber)
+      const textContent = await page.getTextContent()
+      const fullText = textContent.items.map((item: any) => item.str || '').join('')
+      addToTextCache(pageNumber, fullText)
+      return fullText
+    } catch (err) {
+      console.error('Failed to get page text:', err)
+      return null
+    }
+  }, [addToTextCache])
+
+  const resolveDestPageNumber = useCallback(async (
+    doc: pdfjsLib.PDFDocumentProxy,
+    dest: any
+  ): Promise<number | null> => {
+    try {
+      let destArray = dest
+      if (typeof dest === 'string') {
+        destArray = await doc.getDestination(dest)
+      }
+      if (!Array.isArray(destArray) || destArray.length === 0) return null
+      const [ref] = destArray
+      if (!ref) return null
+      const pageIndex = await doc.getPageIndex(ref)
+      return pageIndex + 1
+    } catch (err) {
+      console.warn('Failed to resolve outline destination:', err)
+      return null
+    }
+  }, [])
+
+  const resolveOutlineItem = useCallback(async (
+    doc: pdfjsLib.PDFDocumentProxy,
+    item: any
+  ): Promise<PDFOutlineItem> => {
+    const pageNumber = await resolveDestPageNumber(doc, item.dest)
+    const children = item.items
+      ? await Promise.all(item.items.map((child: any) => resolveOutlineItem(doc, child)))
+      : []
+    return {
+      title: item.title || 'Untitled',
+      pageNumber,
+      items: children,
+    }
+  }, [resolveDestPageNumber])
+
+  const getOutline = useCallback(async (): Promise<PDFOutlineItem[]> => {
+    const doc = pdfRef.current
+    if (!doc) return []
+    try {
+      const outline = await doc.getOutline()
+      if (!outline || outline.length === 0) return []
+      return Promise.all(outline.map((item: any) => resolveOutlineItem(doc, item)))
+    } catch (err) {
+      console.error('Failed to load outline:', err)
+      return []
+    }
+  }, [resolveOutlineItem])
+
+  const renderThumbnail = useCallback(async (
+    pageNumber: number,
+    targetWidth: number = 140
+  ): Promise<string | null> => {
+    const doc = pdfRef.current
+    if (!doc) return null
+    try {
+      const page = await doc.getPage(pageNumber)
+      const baseViewport = page.getViewport({ scale: 1 })
+      const scale = targetWidth / baseViewport.width
+      const viewport = page.getViewport({ scale })
+      const canvas = document.createElement('canvas')
+      const outputScale = window.devicePixelRatio || 1
+      canvas.width = Math.floor(viewport.width * outputScale)
+      canvas.height = Math.floor(viewport.height * outputScale)
+      canvas.style.width = `${viewport.width}px`
+      canvas.style.height = `${viewport.height}px`
+      const context = canvas.getContext('2d')
+      if (!context) return null
+      context.scale(outputScale, outputScale)
+      const renderTask = page.render({
+        canvasContext: context,
+        viewport,
+      })
+      await renderTask.promise
+      return canvas.toDataURL('image/png')
+    } catch (err) {
+      console.error('Failed to render thumbnail:', err)
+      return null
+    }
+  }, [])
+
   // Expose methods via ref
   useImperativeHandle(ref, () => ({
     goToPage: (page: number) => goToPage(page),
     getCurrentPage: () => currentPage,
+    getTotalPages: () => totalPages,
     getTextLayerInfo: (pageNumber: number): TextLayerInfo | null => {
       const textLayer = textLayerRefs.current.get(pageNumber)
       if (!textLayer) return null
@@ -104,6 +254,9 @@ const PDFViewerInner = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFView
         scale,
       }
     },
+    getPageText,
+    getOutline,
+    renderThumbnail,
   }))
 
   // Cancel all in-flight render tasks
@@ -157,6 +310,8 @@ const PDFViewerInner = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFView
           renderedPagesRef.current.clear()
           renderingRef.current.clear()
           pageRefs.current.clear()
+          textLayerRefs.current.clear()
+          textContentCache.current.clear()
           renderScaleRef.current = scale
         } else {
           // If cancelled, destroy the loaded document
@@ -181,18 +336,20 @@ const PDFViewerInner = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFView
     }
   }, [data, cancelAllRenderTasks])
 
-  // Render a single page
+  // Render a single page - uses refs for stable callback
   const renderPage = useCallback(
     async (pageNum: number, container: HTMLDivElement) => {
-      if (!pdf || renderingRef.current.has(pageNum)) return
+      const currentPdf = pdfRef.current
+      const currentScale = scaleRef.current
+      if (!currentPdf || renderingRef.current.has(pageNum)) return
       // Skip if already rendered (canvas exists)
       if (container.querySelector('canvas')) return
 
       renderingRef.current.add(pageNum)
 
       try {
-        const page = await pdf.getPage(pageNum)
-        const viewport = page.getViewport({ scale })
+        const page = await currentPdf.getPage(pageNum)
+        const viewport = page.getViewport({ scale: currentScale })
 
         // Clear container (safe now since React doesn't manage children of this element)
         container.innerHTML = ''
@@ -235,7 +392,7 @@ const PDFViewerInner = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFView
         textLayer.className = 'textLayer'
         textLayer.style.width = `${viewport.width}px`
         textLayer.style.height = `${viewport.height}px`
-        textLayer.style.setProperty('--scale-factor', scale.toString())
+        textLayer.style.setProperty('--scale-factor', currentScale.toString())
         container.appendChild(textLayer)
 
         // Render text layer using new API
@@ -246,10 +403,10 @@ const PDFViewerInner = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFView
         })
         await textLayerInstance.render()
 
-        // Store text layer reference and text content for highlights
+        // Store text layer reference and text content for highlights (with LRU cache)
         textLayerRefs.current.set(pageNum, textLayer)
         const fullText = textContent.items.map((item: any) => item.str || '').join('')
-        textContentCache.current.set(pageNum, fullText)
+        addToTextCache(pageNum, fullText)
 
         // Run content detection for investigate mode
         if (isInvestigateMode) {
@@ -275,20 +432,21 @@ const PDFViewerInner = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFView
         renderTasksRef.current.delete(pageNum)
       }
     },
-    [pdf, scale, isInvestigateMode, detectPageContent, updateZoneBounds]
+    [isInvestigateMode, detectPageContent, updateZoneBounds, addToTextCache] // Removed pdf/scale - using refs
   )
 
-  // Handle scroll to detect visible pages
+  // Handle scroll to detect visible pages - uses refs for stable callback
   const handleScroll = useCallback(() => {
-    if (!containerRef.current || !pdf) return
+    if (!containerRef.current || !pdfRef.current) return
 
     const container = containerRef.current
     const scrollTop = container.scrollTop
     const containerHeight = container.clientHeight
+    const currentTotalPages = totalPagesRef.current
 
     // Find current page based on scroll position
     let accumulatedHeight = 0
-    for (let i = 1; i <= totalPages; i++) {
+    for (let i = 1; i <= currentTotalPages; i++) {
       const pageDiv = pageRefs.current.get(i)
       if (pageDiv) {
         const pageHeight = pageDiv.offsetHeight + 16 // margin
@@ -305,7 +463,7 @@ const PDFViewerInner = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFView
     const visibleEnd = scrollTop + containerHeight * 2
 
     accumulatedHeight = 0
-    for (let i = 1; i <= totalPages; i++) {
+    for (let i = 1; i <= currentTotalPages; i++) {
       const pageDiv = pageRefs.current.get(i)
       if (pageDiv) {
         const pageHeight = pageDiv.offsetHeight + 16
@@ -321,7 +479,7 @@ const PDFViewerInner = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFView
         accumulatedHeight += pageHeight
       }
     }
-  }, [pdf, totalPages, renderPage])
+  }, [renderPage]) // Removed pdf/totalPages - using refs
 
   // Set up scroll listener
   useEffect(() => {
@@ -401,6 +559,17 @@ const PDFViewerInner = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFView
   useEffect(() => {
     onScaleChange?.(scale)
   }, [scale, onScaleChange])
+
+  // Report current page changes and update input
+  useEffect(() => {
+    onPageChange?.(currentPage)
+    setPageInput(currentPage.toString())
+  }, [currentPage, onPageChange])
+
+  // Report total pages changes
+  useEffect(() => {
+    onTotalPagesChange?.(totalPages)
+  }, [totalPages, onTotalPagesChange])
 
   // Re-render on scale change with CSS transform for smooth visual scaling
   useEffect(() => {
@@ -531,10 +700,23 @@ const PDFViewerInner = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFView
   const resetZoom = () => setScale(SCALE_DEFAULT)
 
   const goToPage = (page: number) => {
-    const pageDiv = pageRefs.current.get(page)
+    const maxPage = totalPages || 1
+    const safePage = Math.max(1, Math.min(maxPage, page))
+    const pageDiv = pageRefs.current.get(safePage)
     if (pageDiv && containerRef.current) {
       pageDiv.scrollIntoView({ behavior: 'smooth', block: 'start' })
     }
+  }
+
+  const commitPageInput = () => {
+    const parsed = parseInt(pageInput, 10)
+    if (Number.isNaN(parsed)) {
+      setPageInput(currentPage.toString())
+      return
+    }
+    const clamped = Math.max(1, Math.min(totalPages || 1, parsed))
+    setPageInput(clamped.toString())
+    goToPage(clamped)
   }
 
   return (
@@ -578,9 +760,33 @@ const PDFViewerInner = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFView
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
           </button>
-          <span className="text-sm text-gray-400">
-            {currentPage} / {totalPages}
-          </span>
+          <div className="flex items-center gap-1 text-sm text-gray-400">
+            <input
+              type="text"
+              inputMode="numeric"
+              value={pageInput}
+              onChange={(e) => {
+                const next = e.target.value.replace(/[^0-9]/g, '')
+                setPageInput(next)
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  commitPageInput()
+                  e.currentTarget.blur()
+                }
+                if (e.key === 'Escape') {
+                  e.preventDefault()
+                  setPageInput(currentPage.toString())
+                  e.currentTarget.blur()
+                }
+              }}
+              onBlur={commitPageInput}
+              className="w-12 px-1.5 py-0.5 text-center bg-gray-700/50 border border-gray-600/50 rounded text-gray-200 focus:outline-none focus:border-blue-500/50"
+              aria-label="Page number"
+            />
+            <span className="text-gray-500">/ {totalPages || 0}</span>
+          </div>
           <button
             onClick={() => goToPage(Math.min(totalPages, currentPage + 1))}
             disabled={currentPage >= totalPages}
@@ -669,8 +875,8 @@ const PDFViewerInner = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFView
   )
 })
 
-function PDFViewer(props: PDFViewerProps) {
-  return <PDFViewerInner {...props} />
-}
+const PDFViewer = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFViewer(props, ref) {
+  return <PDFViewerInner {...props} ref={ref} />
+})
 
 export default PDFViewer

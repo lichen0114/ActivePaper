@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useMemo, memo } from 'react'
 import HighlightPopover from './HighlightPopover'
 import { getHighlightBgClass } from './HighlightColorPicker'
 import type { HighlightData } from '../../hooks/useHighlights'
@@ -23,7 +23,7 @@ interface HighlightRect {
   rects: DOMRect[]
 }
 
-function HighlightLayer({
+const HighlightLayer = memo(function HighlightLayer({
   highlights,
   textLayerInfo,
   pageNumber,
@@ -119,7 +119,7 @@ function HighlightLayer({
       )}
     </>
   )
-}
+})
 
 // Calculate rectangles for highlight based on character offsets
 function calculateHighlightRects(

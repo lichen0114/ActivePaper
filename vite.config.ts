@@ -50,6 +50,15 @@ export default defineConfig({
     rollupOptions: {
       input: {
         main: resolve(__dirname, 'index.html')
+      },
+      output: {
+        // Manual chunks for code splitting - heavy dependencies load separately
+        manualChunks: {
+          // Dashboard-related heavy deps (recharts, force-graph)
+          'dashboard': ['recharts', 'react-force-graph-2d'],
+          // PDF.js core
+          'pdf': ['pdfjs-dist'],
+        }
       }
     }
   }

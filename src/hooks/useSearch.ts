@@ -15,6 +15,10 @@ export interface PDFSearchMatch {
   pageNumber: number
   text: string
   index: number
+  kind?: 'text' | 'annotation'
+  highlightId?: string
+  note?: string | null
+  color?: HighlightColor
 }
 
 export function useSearch(documentId?: string | null) {
@@ -32,7 +36,7 @@ export function useSearch(documentId?: string | null) {
   }, [])
 
   const setScope = useCallback((scope: SearchScope) => {
-    setState(prev => ({ ...prev, scope, results: null, pdfMatches: [] }))
+    setState(prev => ({ ...prev, scope, results: null, pdfMatches: [], selectedResultIndex: 0, isLoading: false }))
   }, [])
 
   const search = useCallback(async () => {
@@ -77,7 +81,15 @@ export function useSearch(documentId?: string | null) {
   }, [state.query, state.scope, documentId])
 
   const setPdfMatches = useCallback((matches: PDFSearchMatch[]) => {
-    setState(prev => ({ ...prev, pdfMatches: matches, selectedResultIndex: 0 }))
+    setState(prev => ({ ...prev, pdfMatches: matches, selectedResultIndex: 0, isLoading: false }))
+  }, [])
+
+  const setSelectedResultIndex = useCallback((index: number) => {
+    setState(prev => ({ ...prev, selectedResultIndex: index }))
+  }, [])
+
+  const setIsLoading = useCallback((isLoading: boolean) => {
+    setState(prev => ({ ...prev, isLoading }))
   }, [])
 
   const selectNextResult = useCallback(() => {
@@ -113,6 +125,8 @@ export function useSearch(documentId?: string | null) {
     setScope,
     search,
     setPdfMatches,
+    setSelectedResultIndex,
+    setIsLoading,
     selectNextResult,
     selectPreviousResult,
     clearSearch,

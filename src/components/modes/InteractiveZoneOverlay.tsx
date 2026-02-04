@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, memo } from 'react'
 import type { InteractiveZone, InteractiveZoneType } from '../../types/modes'
 
 interface InteractiveZoneOverlayProps {
@@ -69,7 +69,7 @@ function ZoneHighlight({
   )
 }
 
-export default function InteractiveZoneOverlay({
+const InteractiveZoneOverlay = memo(function InteractiveZoneOverlay({
   zones,
   containerRef,
   onZoneClick,
@@ -113,4 +113,6 @@ export default function InteractiveZoneOverlay({
       </div>
     </div>
   )
-}
+})
+
+export default InteractiveZoneOverlay

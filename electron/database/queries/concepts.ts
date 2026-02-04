@@ -78,13 +78,52 @@ export function saveConceptsForInteraction(
 ): Concept[] {
   const db = getDatabase()
   const concepts: Concept[] = []
+  const now = Date.now()
 
+  // Batch all operations in a single transaction for efficiency
   db.transaction(() => {
+    // First, get or create all concepts in batch
     for (const name of conceptNames) {
-      const concept = getOrCreateConcept(name)
-      concepts.push(concept)
-      linkConceptToInteraction(concept.id, interactionId)
-      linkConceptToDocument(concept.id, documentId)
+      const normalizedName = name.toLowerCase().trim()
+      const existing = db.prepare(
+        'SELECT * FROM concepts WHERE LOWER(name) = ?'
+      ).get(normalizedName) as Concept | undefined
+
+      if (existing) {
+        concepts.push(existing)
+      } else {
+        const id = randomUUID()
+        db.prepare(
+          'INSERT INTO concepts (id, name, created_at) VALUES (?, ?, ?)'
+        ).run(id, name.trim(), now)
+        concepts.push({ id, name: name.trim(), created_at: now })
+      }
+    }
+
+    // Batch insert interaction-concept links (using INSERT OR IGNORE for idempotence)
+    const insertInteractionLink = db.prepare(`
+      INSERT OR IGNORE INTO interaction_concepts (interaction_id, concept_id)
+      VALUES (?, ?)
+    `)
+    for (const concept of concepts) {
+      insertInteractionLink.run(interactionId, concept.id)
+    }
+
+    // Batch upsert document-concept links
+    const updateDocLink = db.prepare(`
+      UPDATE document_concepts
+      SET occurrence_count = occurrence_count + 1
+      WHERE document_id = ? AND concept_id = ?
+    `)
+    const insertDocLink = db.prepare(`
+      INSERT INTO document_concepts (document_id, concept_id, occurrence_count)
+      VALUES (?, ?, 1)
+    `)
+    for (const concept of concepts) {
+      const result = updateDocLink.run(documentId, concept.id)
+      if (result.changes === 0) {
+        insertDocLink.run(documentId, concept.id)
+      }
     }
   })()
 
