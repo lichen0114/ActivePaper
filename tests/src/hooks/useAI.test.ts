@@ -154,7 +154,9 @@ describe('useAI', () => {
         undefined,
         expect.any(Function),
         expect.any(Function),
-        expect.any(Function)
+        expect.any(Function),
+        undefined,
+        undefined,
       )
     })
 
@@ -187,7 +189,9 @@ describe('useAI', () => {
         undefined,
         expect.any(Function),
         expect.any(Function),
-        expect.any(Function)
+        expect.any(Function),
+        undefined,
+        undefined,
       )
     })
 
@@ -257,7 +261,9 @@ describe('useAI', () => {
         undefined,
         expect.any(Function),
         expect.any(Function),
-        expect.any(Function)
+        expect.any(Function),
+        undefined,
+        undefined,
       )
     })
 
@@ -295,7 +301,9 @@ describe('useAI', () => {
         conversationHistory,
         expect.any(Function),
         expect.any(Function),
-        expect.any(Function)
+        expect.any(Function),
+        undefined,
+        undefined,
       )
     })
   })

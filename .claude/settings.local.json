@@ -27,7 +27,8 @@
       "Bash(tee:*)",
       "WebFetch(domain:www.electronjs.org)",
       "WebFetch(domain:playwright.dev)",
-      "Bash(git config:*)"
+      "Bash(git config:*)",
+      "Bash(git stash:*)"
     ]
   }
 }

@@ -30,7 +30,7 @@ Tests use Vitest with jsdom environment (default) or node environment for databa
 
 **Known Pre-existing Test Failures**:
 - Provider tests (gemini, openai, anthropic, ollama) fail due to MSW setup issue — `server` imported from `tests/setup.ts` is only initialized in jsdom, but provider tests run in jsdom where MSW has configuration mismatches with the provider URLs
-- Migration test expects schema version 2 but schema is at version 3
+- Migration test expects schema version 2 but schema is at version 4
 - Key-store tests use `vi.resetModules()` for fresh static state on each test — necessary because `KeyStore` has static cache
 
 ## Architecture
@@ -58,13 +58,15 @@ ActivePaper is an Electron + React desktop app that lets users select text in PD
 Providers in `electron/providers/` implement the `AIProvider` interface:
 
 ```typescript
-type ActionType = 'explain' | 'summarize' | 'define'
+type ActionType = 'explain' | 'summarize' | 'define' | 'parse_equation' | 'explain_fundamental' | 'extract_terms'
 
 interface CompletionRequest {
   text: string
   context?: string
-  action?: ActionType
+  action?: ActionType | string          // string allows custom action IDs
   conversationHistory?: Array<{ role: 'user' | 'assistant'; content: string }>
+  customization?: AICustomization       // Global preferences + per-doc context
+  customPromptTemplate?: string         // Raw template for custom actions
 }
 
 interface AIProvider {
@@ -78,7 +80,9 @@ interface AIProvider {
 
 Current providers: `ollama` (local), `gemini`, `openai`, `anthropic` (cloud).
 
-To add a new provider: implement the interface with an async generator `complete()` method, then register in `ProviderManager.initializeProviders()`. Call `refreshProviders()` after API key changes to reinitialize providers with new keys. Each provider should implement action-specific prompt templates in a `buildUserMessage()` or similar method.
+All 4 providers use the centralized **prompt builder** (`electron/providers/prompt-builder.ts`) for prompt construction. The prompt builder applies style customization (tone, length, format) only to "styleable" actions (`explain`, `summarize`, `define`, custom actions) and skips styling for machine-readable actions (`parse_equation`, `extract_terms`). Custom action templates use `{text}` and `{context}` placeholders.
+
+To add a new provider: implement the interface with an async generator `complete()` method, then register in `ProviderManager.initializeProviders()`. Call `refreshProviders()` after API key changes to reinitialize providers with new keys. Use the prompt builder's `buildSystemPrompt()`, `buildUserMessage()`, `getModel()`, `getTemperature()`, and `getMaxTokens()` functions instead of hardcoding prompts.
 
 **AI stream safety**: Streams have a 60s inactivity timeout, 2MB max response size cap, and preload IPC listeners auto-cleanup after 90s. Active streams are cancelled on app quit via `AbortController`.
 
@@ -98,8 +102,21 @@ SQLite database (`activepaper.db` in userData) via better-sqlite3 with WAL mode 
   - `conversations.ts` - Persistent AI conversation threads
   - `search.ts` - FTS5 full-text search across documents, interactions, concepts
   - `workspaces.ts` - Workspace management for multi-document chat
+  - `ai-preferences.ts` - AI preferences, custom actions, per-document AI context
 
-Schema relationships: documents → interactions → concepts (via junction tables), interactions → review_cards, documents → highlights, documents → conversations → conversation_messages, workspaces → workspace_documents → documents, conversations → conversation_sources → documents
+Schema relationships: documents → interactions → concepts (via junction tables), interactions → review_cards, documents → highlights, documents → conversations → conversation_messages, workspaces → workspace_documents → documents, conversations → conversation_sources → documents, documents → document_ai_context (1:1 optional)
+
+### AI Customization System
+
+Three-tier customization system for AI responses, all optional with sensible defaults:
+
+1. **Global preferences** (`ai_preferences` table, singleton row): tone (standard/formal/casual/technical/eli5/academic), response length (concise/standard/detailed), response format (prose/bullets/step_by_step/qa), custom system prompt with toggle, per-provider model override, temperature, max tokens
+2. **Per-document context** (`document_ai_context` table): instructions specific to a document (e.g., "This is a quantum mechanics textbook, chapter 7"), accessible via `DocumentContextEditor` popover near the tab bar
+3. **Custom actions** (`custom_actions` table): user-created prompt templates beyond Explain/Summarize/Define, with name, emoji, and template using `{text}`/`{context}` placeholders. Appear in SelectionPopover after built-in actions.
+
+**Data flow**: `useAIPreferences` hook loads all three → `buildCustomization()` merges them into an `AICustomization` object → passed through `useAI.askAI()` → IPC → provider's `complete()` → `prompt-builder.ts` applies customization to system prompt, user message, temperature, max tokens, and model selection.
+
+**Settings UI**: `SettingsModal` has 6 tabs — API Keys, Response Style (chip selectors), Persona (system prompt textarea), Custom Actions (CRUD list), Advanced (temperature slider, max tokens, model dropdowns), Data (export/backup). Each tab is a sub-component in `src/components/settings/`.
 
 ### Security
 
@@ -131,6 +148,9 @@ Schema relationships: documents → interactions → concepts (via junction tabl
 - `db:conversations:*` - Conversation threads with messages
 - `db:workspaces:*` - Workspace CRUD and document membership
 - `db:conversationSources:*` - Multi-document conversation sources
+- `db:aiPreferences:get/update` - Global AI preferences
+- `db:customActions:list/create/update/delete` - Custom action CRUD
+- `db:documentContext:get/set/delete` - Per-document AI context
 - `search:*` - Full-text search (documents, interactions, concepts, all)
 
 ### UI Layout
@@ -264,6 +284,7 @@ Database tables: `workspaces`, `workspace_documents` (junction), `conversation_s
 - `useSearch` - Full-text search with scope filtering (all, current PDF, library, interactions, concepts)
 - `useWorkspace` - Workspace state management with localStorage persistence for multi-document chat
 - `useOfflineDetection` - Monitors `navigator.onLine` for connectivity status
+- `useAIPreferences` - AI preferences, custom actions, document context management with `buildCustomization()`
 
 ## Build Notes
 
@@ -330,6 +351,7 @@ Configured in both `vite.config.ts` and `vitest.config.ts`:
 - `src/types/explainer.ts` - Concept stack types
 - `src/types/tabs.ts` - Tab state types
 - `src/types/pdf.ts` - PDF outline and navigation types
+- `src/types/ai-customization.ts` - AI customization types (preferences, custom actions, document context)
 
 ## Performance Patterns
 

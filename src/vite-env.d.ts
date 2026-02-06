@@ -2,6 +2,88 @@
 
 type ActionType = 'explain' | 'summarize' | 'define' | 'parse_equation' | 'explain_fundamental' | 'extract_terms'
 
+// AI Customization types
+type ResponseTone = 'standard' | 'formal' | 'casual' | 'technical' | 'eli5' | 'academic'
+type ResponseLength = 'concise' | 'standard' | 'detailed'
+type ResponseFormat = 'prose' | 'bullets' | 'step_by_step' | 'qa'
+
+interface AICustomization {
+  tone?: ResponseTone
+  responseLength?: ResponseLength
+  responseFormat?: ResponseFormat
+  customSystemPrompt?: string | null
+  documentContext?: string | null
+  temperature?: number | null
+  maxTokens?: number | null
+  model?: string | null
+}
+
+interface AIPreferencesDb {
+  id: string
+  tone: ResponseTone
+  response_length: ResponseLength
+  response_format: ResponseFormat
+  custom_system_prompt: string | null
+  custom_system_prompt_enabled: number
+  temperature: number | null
+  max_tokens: number | null
+  model_openai: string | null
+  model_anthropic: string | null
+  model_gemini: string | null
+  model_ollama: string | null
+  created_at: number
+  updated_at: number
+}
+
+interface AIPreferencesUpdate {
+  tone?: string
+  response_length?: string
+  response_format?: string
+  custom_system_prompt?: string | null
+  custom_system_prompt_enabled?: number
+  temperature?: number | null
+  max_tokens?: number | null
+  model_openai?: string | null
+  model_anthropic?: string | null
+  model_gemini?: string | null
+  model_ollama?: string | null
+}
+
+interface CustomActionDb {
+  id: string
+  name: string
+  emoji: string
+  prompt_template: string
+  sort_order: number
+  enabled: number
+  created_at: number
+  updated_at: number
+}
+
+interface CustomActionCreate {
+  name: string
+  emoji?: string
+  prompt_template: string
+  sort_order?: number
+}
+
+interface CustomActionUpdate {
+  id: string
+  name?: string
+  emoji?: string
+  prompt_template?: string
+  sort_order?: number
+  enabled?: number
+}
+
+interface DocumentAIContextDb {
+  document_id: string
+  context_instructions: string
+  enabled: number
+  created_at: number
+  updated_at: number
+}
+
 interface ConversationMessage {
   role: 'user' | 'assistant'
   content: string
@@ -224,11 +306,13 @@ interface Window {
       text: string,
       context: string,
       providerId?: string,
-      action?: ActionType,
+      action?: ActionType | string,
       conversationHistory?: ConversationMessage[],
       onChunk?: (chunk: string) => void,
       onDone?: () => void,
-      onError?: (error: string) => void
+      onError?: (error: string) => void,
+      customization?: AICustomization,
+      customPromptTemplate?: string,
     ) => Promise<void>
     getProviders: () => Promise<ProviderInfo[]>
     getCurrentProvider: () => Promise<ProviderInfo | null>
@@ -325,6 +409,18 @@ interface Window {
     getConversationSources: (conversationId: string) => Promise<ConversationSource[]>
     setConversationWorkspace: (conversationId: string, workspaceId: string | null) => Promise<boolean>
     getWorkspaceConversations: (workspaceId: string) => Promise<Array<{ id: string; selected_text: string; title: string | null; created_at: number; updated_at: number }>>
+    // AI Preferences
+    getAIPreferences: () => Promise<AIPreferencesDb>
+    updateAIPreferences: (updates: AIPreferencesUpdate) => Promise<AIPreferencesDb>
+    // Custom Actions
+    getCustomActions: () => Promise<CustomActionDb[]>
+    createCustomAction: (data: CustomActionCreate) => Promise<CustomActionDb>
+    updateCustomAction: (data: CustomActionUpdate) => Promise<CustomActionDb | null>
+    deleteCustomAction: (id: string) => Promise<boolean>
+    // Document AI Context
+    getDocumentAIContext: (documentId: string) => Promise<DocumentAIContextDb | null>
+    setDocumentAIContext: (documentId: string, contextInstructions: string, enabled?: number) => Promise<DocumentAIContextDb>
+    deleteDocumentAIContext: (documentId: string) => Promise<boolean>
     // App info
     getAppInfo: () => Promise<{ version: string; dataPath: string }>
     // Data export & backup

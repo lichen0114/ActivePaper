@@ -1,6 +1,8 @@
-import type { AIProvider, CompletionRequest, ActionType, ConversationMessage } from './index'
+import type { AIProvider, CompletionRequest, ConversationMessage } from './index'
+import { buildSystemPrompt, buildUserMessage, getTemperature, getMaxTokens, getModel } from './prompt-builder'
 
 const OPENAI_API_URL = 'https://api.openai.com/v1/chat/completions'
+const DEFAULT_MODEL = 'gpt-4o-mini'
 
 export class OpenAIProvider implements AIProvider {
   id = 'openai'
@@ -18,6 +20,9 @@ export class OpenAIProvider implements AIProvider {
       throw new Error('OpenAI API key not configured')
     }
 
+    const model = getModel(this.id, request.customization, DEFAULT_MODEL)
+    const temperature = getTemperature(request.customization, 0.7)
+    const max_tokens = getMaxTokens(request.customization, 2048)
     const messages = this.buildMessages(request)
 
     const response = await fetch(OPENAI_API_URL, {
@@ -27,11 +32,11 @@ export class OpenAIProvider implements AIProvider {
         'Authorization': `Bearer ${this.apiKey}`,
       },
       body: JSON.stringify({
-        model: 'gpt-4o-mini',
+        model,
         messages,
         stream: true,
-        max_tokens: 2048,
-        temperature: 0.7,
+        max_tokens,
+        temperature,
       }),
     })
 
@@ -78,10 +83,8 @@ export class OpenAIProvider implements AIProvider {
   }
 
   private buildMessages(request: CompletionRequest): Array<{ role: string; content: string }> {
-    const systemPrompt = `You are a helpful AI assistant helping a user understand a PDF document. Keep your responses concise but thorough.`
-
+    const systemPrompt = buildSystemPrompt(request.customization)
     const action = request.action || 'explain'
-    const userMessage = this.buildUserMessage(request.text, request.context, action)
 
     // If there's conversation history (follow-up), include it
     if (request.conversationHistory && request.conversationHistory.length > 0) {
@@ -94,73 +97,14 @@ export class OpenAIProvider implements AIProvider {
       ]
     }
 
+    const userMessage = buildUserMessage(
+      request.text, request.context, action,
+      request.customization, request.customPromptTemplate
+    )
+
     return [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userMessage },
     ]
-  }
-
-  private buildUserMessage(text: string, context: string | undefined, action: ActionType): string {
-    let prompt = ''
-
-    switch (action) {
-      case 'summarize':
-        prompt = `Summarize the key points of this text from a PDF document:\n\n"${text}"`
-        break
-      case 'define':
-        prompt = `Define and explain this term or concept from a PDF document:\n\n"${text}"`
-        if (context) {
-          prompt += `\n\nContext from the document:\n"${context}"`
-        }
-        break
-      case 'parse_equation':
-        prompt = `Analyze this mathematical equation or formula and extract its variables. Return ONLY a JSON object with this exact structure (no markdown, no explanation):
-{
-  "variables": [
-    {"name": "variable_symbol", "description": "what it represents", "range": [min, max], "unit": "optional_unit"}
-  ],
-  "formula": "the equation in readable form",
-  "compute": "JavaScript expression to compute the dependent variable, using variable names"
-}
-
-For example, for "F = ma":
-{
-  "variables": [
-    {"name": "m", "description": "mass", "range": [0, 100], "unit": "kg"},
-    {"name": "a", "description": "acceleration", "range": [0, 20], "unit": "m/s²"}
-  ],
-  "formula": "F = ma",
-  "compute": "m * a"
-}
-
-Equation to analyze: "${text}"`
-        break
-      case 'explain_fundamental':
-        prompt = `Explain this concept using first principles, starting from the most fundamental ideas. Make any technical terms you use **bold** so they can be clicked for further explanation.
-
-Keep the explanation concise but thorough. Focus on building understanding from the ground up.
-
-Concept: "${text}"`
-        if (context) {
-          prompt += `\n\nContext from the document:\n"${context}"`
-        }
-        break
-      case 'extract_terms':
-        prompt = `Extract the technical terms from this text that could benefit from further explanation. Return ONLY a JSON array of term objects (no markdown, no explanation):
-
-[{"term": "technical_term", "description": "brief_description"}]
-
-Text: "${text}"`
-        break
-      case 'explain':
-      default:
-        prompt = `Explain this text from a PDF document in simple terms:\n\n"${text}"`
-        if (context) {
-          prompt += `\n\nSurrounding context from the document:\n"${context}"`
-        }
-        break
-    }
-
-    return prompt
   }
 }

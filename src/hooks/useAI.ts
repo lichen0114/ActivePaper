@@ -22,8 +22,10 @@ export function useAI() {
   const askAI = useCallback(async (
     text: string,
     context?: string,
-    action: ActionType = 'explain',
-    conversationHistory?: Message[]
+    action: ActionType | string = 'explain',
+    conversationHistory?: Message[],
+    customization?: AICustomization,
+    customPromptTemplate?: string,
   ) => {
     if (!window.api) {
       setState({
@@ -79,7 +81,9 @@ export function useAI() {
             isLoading: false,
             error,
           }))
-        }
+        },
+        customization,
+        customPromptTemplate,
       )
     } catch (err) {
       setState((prev) => ({

@@ -2,6 +2,88 @@ import { contextBridge, ipcRenderer, webUtils } from 'electron'
 
 export type ActionType = 'explain' | 'summarize' | 'define'
 
+// AI Customization types
+export type ResponseTone = 'standard' | 'formal' | 'casual' | 'technical' | 'eli5' | 'academic'
+export type ResponseLength = 'concise' | 'standard' | 'detailed'
+export type ResponseFormat = 'prose' | 'bullets' | 'step_by_step' | 'qa'
+
+export interface AICustomization {
+  tone?: ResponseTone
+  responseLength?: ResponseLength
+  responseFormat?: ResponseFormat
+  customSystemPrompt?: string | null
+  documentContext?: string | null
+  temperature?: number | null
+  maxTokens?: number | null
+  model?: string | null
+}
+
+export interface AIPreferences {
+  id: string
+  tone: ResponseTone
+  response_length: ResponseLength
+  response_format: ResponseFormat
+  custom_system_prompt: string | null
+  custom_system_prompt_enabled: number
+  temperature: number | null
+  max_tokens: number | null
+  model_openai: string | null
+  model_anthropic: string | null
+  model_gemini: string | null
+  model_ollama: string | null
+  created_at: number
+  updated_at: number
+}
+
+export interface AIPreferencesUpdate {
+  tone?: string
+  response_length?: string
+  response_format?: string
+  custom_system_prompt?: string | null
+  custom_system_prompt_enabled?: number
+  temperature?: number | null
+  max_tokens?: number | null
+  model_openai?: string | null
+  model_anthropic?: string | null
+  model_gemini?: string | null
+  model_ollama?: string | null
+}
+
+export interface CustomAction {
+  id: string
+  name: string
+  emoji: string
+  prompt_template: string
+  sort_order: number
+  enabled: number
+  created_at: number
+  updated_at: number
+}
+
+export interface CustomActionCreate {
+  name: string
+  emoji?: string
+  prompt_template: string
+  sort_order?: number
+}
+
+export interface CustomActionUpdate {
+  id: string
+  name?: string
+  emoji?: string
+  prompt_template?: string
+  sort_order?: number
+  enabled?: number
+}
+
+export interface DocumentAIContext {
+  document_id: string
+  context_instructions: string
+  enabled: number
+  created_at: number
+  updated_at: number
+}
+
 export interface ConversationMessage {
   role: 'user' | 'assistant'
   content: string
@@ -230,13 +312,15 @@ contextBridge.exposeInMainWorld('api', {
     text: string,
     context: string,
     providerId?: string,
-    action?: ActionType,
+    action?: ActionType | string,
     conversationHistory?: ConversationMessage[],
     onChunk?: (chunk: string) => void,
     onDone?: () => void,
-    onError?: (error: string) => void
+    onError?: (error: string) => void,
+    customization?: AICustomization,
+    customPromptTemplate?: string,
   ): Promise<void> => {
-    const result = await ipcRenderer.invoke('ai:query', { text, context, providerId, action, conversationHistory })
+    const result = await ipcRenderer.invoke('ai:query', { text, context, providerId, action, conversationHistory, customization, customPromptTemplate })
     const { channelId } = result
 
     return new Promise((resolve, reject) => {
@@ -584,6 +668,45 @@ contextBridge.exposeInMainWorld('api', {
 
   getWorkspaceConversations: (workspaceId: string): Promise<Array<{ id: string; selected_text: string; title: string | null; created_at: number; updated_at: number }>> => {
     return ipcRenderer.invoke('db:workspaces:getConversations', workspaceId)
+  },
+
+  // AI Preferences
+  getAIPreferences: (): Promise<AIPreferences> => {
+    return ipcRenderer.invoke('db:aiPreferences:get')
+  },
+
+  updateAIPreferences: (updates: AIPreferencesUpdate): Promise<AIPreferences> => {
+    return ipcRenderer.invoke('db:aiPreferences:update', updates)
+  },
+
+  // Custom Actions
+  getCustomActions: (): Promise<CustomAction[]> => {
+    return ipcRenderer.invoke('db:customActions:list')
+  },
+
+  createCustomAction: (data: CustomActionCreate): Promise<CustomAction> => {
+    return ipcRenderer.invoke('db:customActions:create', data)
+  },
+
+  updateCustomAction: (data: CustomActionUpdate): Promise<CustomAction | null> => {
+    return ipcRenderer.invoke('db:customActions:update', data)
+  },
+
+  deleteCustomAction: (id: string): Promise<boolean> => {
+    return ipcRenderer.invoke('db:customActions:delete', id)
+  },
+
+  // Document AI Context
+  getDocumentAIContext: (documentId: string): Promise<DocumentAIContext | null> => {
+    return ipcRenderer.invoke('db:documentContext:get', documentId)
+  },
+
+  setDocumentAIContext: (documentId: string, contextInstructions: string, enabled?: number): Promise<DocumentAIContext> => {
+    return ipcRenderer.invoke('db:documentContext:set', { documentId, contextInstructions, enabled })
+  },
+
+  deleteDocumentAIContext: (documentId: string): Promise<boolean> => {
+    return ipcRenderer.invoke('db:documentContext:delete', documentId)
   },
 
   // App info

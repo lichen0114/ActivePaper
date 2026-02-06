@@ -1,6 +1,8 @@
-import type { AIProvider, CompletionRequest, ActionType, ConversationMessage } from './index'
+import type { AIProvider, CompletionRequest, ConversationMessage } from './index'
+import { buildSystemPrompt, buildUserMessage, getTemperature, getMaxTokens, getModel } from './prompt-builder'
 
-const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:streamGenerateContent'
+const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
+const DEFAULT_MODEL = 'gemini-3-pro-preview'
 
 export class GeminiProvider implements AIProvider {
   id = 'gemini'
@@ -18,9 +20,12 @@ export class GeminiProvider implements AIProvider {
       throw new Error('Gemini API key not configured')
     }
 
+    const model = getModel(this.id, request.customization, DEFAULT_MODEL)
+    const temperature = getTemperature(request.customization, 0.7)
+    const maxOutputTokens = getMaxTokens(request.customization, 2048)
     const contents = this.buildContents(request)
 
-    const response = await fetch(`${GEMINI_API_URL}?alt=sse`, {
+    const response = await fetch(`${GEMINI_API_BASE}/${model}:streamGenerateContent?alt=sse`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -29,8 +34,8 @@ export class GeminiProvider implements AIProvider {
       body: JSON.stringify({
         contents,
         generationConfig: {
-          temperature: 0.7,
-          maxOutputTokens: 2048,
+          temperature,
+          maxOutputTokens,
         },
       }),
     })
@@ -77,80 +82,30 @@ export class GeminiProvider implements AIProvider {
   private buildContents(request: CompletionRequest): Array<{ role: string; parts: Array<{ text: string }> }> {
     const action = request.action || 'explain'
 
-    // If there's conversation history (follow-up), include it
+    // If there's conversation history (follow-up), include system context and history
     if (request.conversationHistory && request.conversationHistory.length > 0) {
-      return request.conversationHistory.map((msg: ConversationMessage) => ({
+      const systemPrompt = buildSystemPrompt(request.customization)
+      const contents: Array<{ role: string; parts: Array<{ text: string }> }> = []
+
+      // Gemini doesn't have a system role, so prepend system prompt as the first user message
+      // if it differs from default, then pair with a model acknowledgment
+      if (systemPrompt !== 'You are a helpful AI assistant helping a user understand a PDF document.') {
+        contents.push({ role: 'user', parts: [{ text: systemPrompt }] })
+        contents.push({ role: 'model', parts: [{ text: 'Understood. I will follow these instructions.' }] })
+      }
+
+      contents.push(...request.conversationHistory.map((msg: ConversationMessage) => ({
         role: msg.role === 'assistant' ? 'model' : 'user',
         parts: [{ text: msg.content }]
-      }))
+      })))
+
+      return contents
     }
 
-    const prompt = this.buildPrompt(request.text, request.context, action)
-    return [{ role: 'user', parts: [{ text: prompt }] }]
-  }
-
-  private buildPrompt(text: string, context: string | undefined, action: ActionType): string {
-    let prompt = 'You are a helpful AI assistant helping a user understand a PDF document.\n\n'
-
-    switch (action) {
-      case 'summarize':
-        prompt += `Summarize the key points of this text:\n\n"${text}"`
-        break
-      case 'define':
-        prompt += `Define and explain this term or concept:\n\n"${text}"`
-        if (context) {
-          prompt += `\n\nContext from the document:\n"${context}"`
-        }
-        break
-      case 'parse_equation':
-        prompt = `Analyze this mathematical equation or formula and extract its variables. Return ONLY a JSON object with this exact structure (no markdown, no explanation):
-{
-  "variables": [
-    {"name": "variable_symbol", "description": "what it represents", "range": [min, max], "unit": "optional_unit"}
-  ],
-  "formula": "the equation in readable form",
-  "compute": "JavaScript expression to compute the dependent variable, using variable names"
-}
-
-For example, for "F = ma":
-{
-  "variables": [
-    {"name": "m", "description": "mass", "range": [0, 100], "unit": "kg"},
-    {"name": "a", "description": "acceleration", "range": [0, 20], "unit": "m/s²"}
-  ],
-  "formula": "F = ma",
-  "compute": "m * a"
-}
-
-Equation to analyze: "${text}"`
-        return prompt
-      case 'explain_fundamental':
-        prompt += `Explain this concept using first principles, starting from the most fundamental ideas. Make any technical terms you use **bold** so they can be clicked for further explanation.
-
-Keep the explanation concise but thorough. Focus on building understanding from the ground up.
-
-Concept: "${text}"`
-        if (context) {
-          prompt += `\n\nContext from the document:\n"${context}"`
-        }
-        break
-      case 'extract_terms':
-        prompt = `Extract the technical terms from this text that could benefit from further explanation. Return ONLY a JSON array of term objects (no markdown, no explanation):
-
-[{"term": "technical_term", "description": "brief_description"}]
-
-Text: "${text}"`
-        return prompt
-      case 'explain':
-      default:
-        prompt += `Explain this text in simple terms:\n\n"${text}"`
-        if (context) {
-          prompt += `\n\nSurrounding context from the document:\n"${context}"`
-        }
-        break
-    }
-
-    prompt += '\n\nKeep your response concise but thorough.'
-    return prompt
+    const userMessage = buildUserMessage(
+      request.text, request.context, action,
+      request.customization, request.customPromptTemplate
+    )
+    return [{ role: 'user', parts: [{ text: userMessage }] }]
   }
 }

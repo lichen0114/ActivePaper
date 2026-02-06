@@ -1,5 +1,6 @@
 import { useMemo, useState, memo } from 'react'
 import type { ActionType } from '../hooks/useHistory'
+import type { CustomAction } from '../types/ai-customization'
 import {
   containsLatex,
   containsCode,
@@ -17,6 +18,8 @@ interface SelectionToolbarProps {
   onCodeClick?: (code: string) => void
   onExplainerClick?: (term: string) => void
   onHighlight?: (color: HighlightColor) => void
+  customActions?: CustomAction[]
+  onCustomAction?: (actionId: string, promptTemplate: string) => void
   isVisible: boolean
 }
 
@@ -52,10 +55,18 @@ const SelectionPopover = memo(function SelectionPopover({
   onCodeClick,
   onExplainerClick,
   onHighlight,
+  customActions = [],
+  onCustomAction,
   isVisible,
 }: SelectionToolbarProps) {
   const [showColorPicker, setShowColorPicker] = useState(false)
   const [selectedColor, setSelectedColor] = useState<HighlightColor>('yellow')
+
+  // Filter to only enabled custom actions
+  const enabledCustomActions = useMemo(() =>
+    customActions.filter(a => a.enabled),
+    [customActions]
+  )
 
   // Detect content type
   const contentType = useMemo<SelectionContentType>(() => {
@@ -73,6 +84,7 @@ const SelectionPopover = memo(function SelectionPopover({
   const showExplainerAction = hasTechnicalTerm && onExplainerClick
 
   const hasStemActions = showEquationAction || showCodeAction || showExplainerAction
+  const hasCustomActions = enabledCustomActions.length > 0 && onCustomAction
 
   if (!isVisible || !selectionRect) return null
 
@@ -97,7 +109,8 @@ const SelectionPopover = memo(function SelectionPopover({
   const baseWidth = 280
   const stemWidth = hasStemActions ? 120 : 0
   const highlightWidth = onHighlight ? (showColorPicker ? 140 : 45) : 0
-  const toolbarWidth = baseWidth + stemWidth + highlightWidth
+  const customWidth = hasCustomActions ? Math.min(enabledCustomActions.length * 80, 240) : 0
+  const toolbarWidth = baseWidth + stemWidth + highlightWidth + customWidth
   const toolbarHeight = 40
   const padding = 8
   const gap = 8
@@ -178,6 +191,21 @@ const SelectionPopover = memo(function SelectionPopover({
         label="Define"
         onClick={() => onAction('define')}
       />
+
+      {/* Custom actions */}
+      {hasCustomActions && (
+        <>
+          <Divider />
+          {enabledCustomActions.map((action) => (
+            <ToolbarButton
+              key={action.id}
+              icon={<span className="text-sm">{action.emoji}</span>}
+              label={action.name}
+              onClick={() => onCustomAction!(action.id, action.prompt_template)}
+            />
+          ))}
+        </>
+      )}
 
       {/* STEM actions - context-sensitive */}
       {hasStemActions && (

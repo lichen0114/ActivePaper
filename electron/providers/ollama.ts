@@ -1,4 +1,5 @@
 import type { AIProvider, CompletionRequest, ConversationMessage } from './index'
+import { buildSystemPrompt, buildUserMessage, getTemperature, getMaxTokens, getModel } from './prompt-builder'
 
 const OLLAMA_BASE_URL = 'http://localhost:11434'
 const DEFAULT_MODEL = 'llama3.2'
@@ -21,13 +22,23 @@ export class OllamaProvider implements AIProvider {
   }
 
   async *complete(request: CompletionRequest): AsyncIterable<string> {
+    const model = getModel(this.id, request.customization, DEFAULT_MODEL)
+    const temperature = getTemperature(request.customization, 0.7)
+    const num_predict = getMaxTokens(request.customization, 2048)
+
     // If there's conversation history, use chat endpoint
     if (request.conversationHistory && request.conversationHistory.length > 0) {
-      yield* this.completeChat(request)
+      yield* this.completeChat(request, model, temperature, num_predict)
       return
     }
 
-    const prompt = this.buildPrompt(request)
+    const action = request.action || 'explain'
+    const systemPrompt = buildSystemPrompt(request.customization)
+    const userMessage = buildUserMessage(
+      request.text, request.context, action,
+      request.customization, request.customPromptTemplate
+    )
+    const prompt = `${systemPrompt}\n\n${userMessage}`
 
     const response = await fetch(`${OLLAMA_BASE_URL}/api/generate`, {
       method: 'POST',
@@ -35,9 +46,13 @@ export class OllamaProvider implements AIProvider {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: DEFAULT_MODEL,
+        model,
         prompt,
         stream: true,
+        options: {
+          temperature,
+          num_predict,
+        },
       }),
     })
 
@@ -76,11 +91,20 @@ export class OllamaProvider implements AIProvider {
     }
   }
 
-  private async *completeChat(request: CompletionRequest): AsyncIterable<string> {
-    const messages = request.conversationHistory!.map((msg: ConversationMessage) => ({
-      role: msg.role,
-      content: msg.content
-    }))
+  private async *completeChat(
+    request: CompletionRequest,
+    model: string,
+    temperature: number,
+    num_predict: number,
+  ): AsyncIterable<string> {
+    const systemPrompt = buildSystemPrompt(request.customization)
+    const messages = [
+      { role: 'system', content: systemPrompt },
+      ...request.conversationHistory!.map((msg: ConversationMessage) => ({
+        role: msg.role,
+        content: msg.content
+      })),
+    ]
 
     const response = await fetch(`${OLLAMA_BASE_URL}/api/chat`, {
       method: 'POST',
@@ -88,9 +112,13 @@ export class OllamaProvider implements AIProvider {
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
-        model: DEFAULT_MODEL,
+        model,
         messages,
         stream: true,
+        options: {
+          temperature,
+          num_predict,
+        },
       }),
     })
 
@@ -127,71 +155,5 @@ export class OllamaProvider implements AIProvider {
     } finally {
       reader.releaseLock()
     }
-  }
-
-  private buildPrompt(request: CompletionRequest): string {
-    const action = request.action || 'explain'
-    let prompt = 'You are a helpful AI assistant helping a user understand a PDF document.\n\n'
-
-    switch (action) {
-      case 'summarize':
-        prompt += `Summarize the key points of this text:\n\n"${request.text}"`
-        break
-      case 'define':
-        prompt += `Define and explain this term or concept:\n\n"${request.text}"`
-        if (request.context) {
-          prompt += `\n\nContext from the document:\n"${request.context}"`
-        }
-        break
-      case 'parse_equation':
-        prompt = `Analyze this mathematical equation or formula and extract its variables. Return ONLY a JSON object with this exact structure (no markdown, no explanation):
-{
-  "variables": [
-    {"name": "variable_symbol", "description": "what it represents", "range": [min, max], "unit": "optional_unit"}
-  ],
-  "formula": "the equation in readable form",
-  "compute": "JavaScript expression to compute the dependent variable, using variable names"
-}
-
-For example, for "F = ma":
-{
-  "variables": [
-    {"name": "m", "description": "mass", "range": [0, 100], "unit": "kg"},
-    {"name": "a", "description": "acceleration", "range": [0, 20], "unit": "m/s²"}
-  ],
-  "formula": "F = ma",
-  "compute": "m * a"
-}
-
-Equation to analyze: "${request.text}"`
-        return prompt
-      case 'explain_fundamental':
-        prompt += `Explain this concept using first principles, starting from the most fundamental ideas. Make any technical terms you use **bold** so they can be clicked for further explanation.
-
-Keep the explanation concise but thorough. Focus on building understanding from the ground up.
-
-Concept: "${request.text}"`
-        if (request.context) {
-          prompt += `\n\nContext from the document:\n"${request.context}"`
-        }
-        break
-      case 'extract_terms':
-        prompt = `Extract the technical terms from this text that could benefit from further explanation. Return ONLY a JSON array of term objects (no markdown, no explanation):
-
-[{"term": "technical_term", "description": "brief_description"}]
-
-Text: "${request.text}"`
-        return prompt
-      case 'explain':
-      default:
-        prompt += `Explain this text in simple terms:\n\n"${request.text}"`
-        if (request.context) {
-          prompt += `\n\nSurrounding context from the document:\n"${request.context}"`
-        }
-        break
-    }
-
-    prompt += '\n\nKeep your response concise but thorough.'
-    return prompt
   }
 }

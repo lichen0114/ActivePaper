@@ -46,9 +46,11 @@ import { useHighlights, type HighlightData } from './hooks/useHighlights'
 import { useBookmarks } from './hooks/useBookmarks'
 import { useWorkspace } from './hooks/useWorkspace'
 import { useOfflineDetection } from './hooks/useOfflineDetection'
+import { useAIPreferences } from './hooks/useAIPreferences'
 import BookmarksList from './components/highlights/BookmarksList'
 import SearchModal from './components/search/SearchModal'
 import WorkspaceSwitcher from './components/workspace/WorkspaceSwitcher'
+import DocumentContextEditor from './components/DocumentContextEditor'
 import DocumentNavigator from './components/navigation/DocumentNavigator'
 import type { PDFOutlineItem } from './types/pdf'
 import type { PDFSearchMatch } from './hooks/useSearch'
@@ -111,7 +113,7 @@ function AppContent() {
     selectPreviousTab: () => void
     selectNextTab: () => void
     selectTabByIndex: (index: number) => void
-    handleAskAI: (action: ActionType) => void
+    handleAskAI: (action: ActionType, customPromptTemplate?: string) => void
     handleClosePanel: () => void
   }>({
     equationOpenEquation: () => {},
@@ -194,6 +196,9 @@ function AppContent() {
 
   // Offline detection
   const isOnline = useOfflineDetection()
+
+  // AI Preferences
+  const aiPrefs = useAIPreferences(activeTab?.documentId)
 
   // Confirmation dialog state
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -476,7 +481,7 @@ function AppContent() {
       selectPreviousTab,
       selectNextTab,
       selectTabByIndex,
-      handleAskAI: (action: ActionType) => {
+      handleAskAI: (action: ActionType, customPromptTemplate?: string) => {
         if (!selectedText) return
         if (!navigator.onLine) {
           toast.error('No internet connection. Switch to Ollama (local) or connect to the internet.')
@@ -486,18 +491,19 @@ function AppContent() {
         setCurrentAction(action)
         clearResponse()
         clearConversation()
+        const customization = aiPrefs.buildCustomization()
         const documentId = activeTab?.documentId
         if (documentId) {
           startConversation(selectedText, pageContext || '', documentId).then(() => {
             addMessage('user', selectedText, action)
             addMessage('assistant', '')
-            askAI(selectedText, pageContext, action)
+            askAI(selectedText, pageContext, action, undefined, customization, customPromptTemplate)
           })
         } else {
           startConversation(selectedText, pageContext || '', '').then(() => {
             addMessage('user', selectedText, action)
             addMessage('assistant', '')
-            askAI(selectedText, pageContext, action)
+            askAI(selectedText, pageContext, action, undefined, customization, customPromptTemplate)
           })
         }
       },
@@ -510,7 +516,7 @@ function AppContent() {
     }
   })
 
-  const handleAskAI = useCallback(async (action: ActionType = 'explain') => {
+  const handleAskAI = useCallback(async (action: ActionType = 'explain', customPromptTemplate?: string) => {
     if (!selectedText) return
 
     // Check online status before making cloud AI requests
@@ -523,6 +529,8 @@ function AppContent() {
     setCurrentAction(action)
     clearResponse()
     clearConversation()
+
+    const customization = aiPrefs.buildCustomization()
 
     // Start persistent conversation if we have a documentId
     const documentId = activeTab?.documentId
@@ -538,8 +546,13 @@ function AppContent() {
     await addMessage('user', userMessage, action)
     await addMessage('assistant', '')
 
-    await askAI(selectedText, pageContext, action)
-  }, [selectedText, pageContext, askAI, clearResponse, clearConversation, startConversation, addMessage, activeTab?.documentId, isOnline])
+    await askAI(selectedText, pageContext, action, undefined, customization, customPromptTemplate)
+  }, [selectedText, pageContext, askAI, clearResponse, clearConversation, startConversation, addMessage, activeTab?.documentId, isOnline, aiPrefs.buildCustomization])
+
+  // Handle custom action from SelectionPopover
+  const handleCustomAction = useCallback((_actionId: string, promptTemplate: string) => {
+    handleAskAI('explain' as ActionType, promptTemplate)
+  }, [handleAskAI])
 
   // Update conversation when response streams in
   useEffect(() => {
@@ -662,14 +675,17 @@ function AppContent() {
       { role: 'user' as const, content: followUpText },
     ]
 
+    const customization = aiPrefs.buildCustomization()
+
     clearResponse()
     await askAI(
       conversation.selectedText,
       conversation.pageContext,
       currentAction,
-      historyWithFollowUp
+      historyWithFollowUp,
+      customization,
     )
-  }, [conversation, isLoading, addMessage, clearResponse, askAI, currentAction])
+  }, [conversation, isLoading, addMessage, clearResponse, askAI, currentAction, aiPrefs.buildCustomization])
 
   // Wrap conversation deletion with confirmation
   const handleDeleteConversation = useCallback((id: string) => {
@@ -1009,13 +1025,27 @@ function AppContent() {
 
       {/* Tab bar - only show in reader view when there are tabs */}
       {currentView === 'reader' && tabs.length > 0 && (
-        <TabBar
-          tabs={tabs}
-          activeTabId={activeTabId}
-          onTabSelect={selectTab}
-          onTabClose={handleTabClose}
-          onNewTab={handleNewTab}
-        />
+        <div className="flex items-center border-b border-gray-700">
+          <div className="flex-1 overflow-hidden">
+            <TabBar
+              tabs={tabs}
+              activeTabId={activeTabId}
+              onTabSelect={selectTab}
+              onTabClose={handleTabClose}
+              onNewTab={handleNewTab}
+            />
+          </div>
+          {activeTab?.documentId && (
+            <div className="px-2 flex-shrink-0">
+              <DocumentContextEditor
+                documentId={activeTab.documentId}
+                documentContext={aiPrefs.documentContext}
+                onSave={aiPrefs.setDocContext}
+                onDelete={aiPrefs.deleteDocContext}
+              />
+            </div>
+          )}
+        </div>
       )}
 
       {/* Main content area */}
@@ -1139,6 +1169,8 @@ function AppContent() {
                 onCodeClick={codeSandbox.openSandbox}
                 onExplainerClick={conceptStack.pushCard}
                 onHighlight={handleCreateHighlight}
+                customActions={aiPrefs.customActions}
+                onCustomAction={handleCustomAction}
                 isVisible={!!selectedText && !isPanelOpen && !equationEngine.isOpen && !codeSandbox.isOpen && !conceptStack.isOpen}
               />
             </div>
@@ -1181,6 +1213,12 @@ function AppContent() {
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         onKeyChange={handleKeyChange}
+        preferences={aiPrefs.preferences}
+        customActions={aiPrefs.customActions}
+        onUpdatePreferences={aiPrefs.updatePreferences}
+        onCreateAction={aiPrefs.createAction}
+        onUpdateAction={aiPrefs.updateAction}
+        onDeleteAction={aiPrefs.deleteAction}
       />
 
       {/* Search modal */}

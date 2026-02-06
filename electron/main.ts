@@ -15,6 +15,7 @@ import * as bookmarksDb from './database/queries/bookmarks'
 import * as conversationsDb from './database/queries/conversations'
 import * as searchDb from './database/queries/search'
 import * as workspacesDb from './database/queries/workspaces'
+import * as aiPreferencesDb from './database/queries/ai-preferences'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -139,7 +140,7 @@ function setupIPC() {
   providerManager = new ProviderManager()
 
   // AI Query handler with streaming, buffering, and cancellation support
-  ipcMain.handle('ai:query', async (_event, { text, context, providerId, action, conversationHistory }) => {
+  ipcMain.handle('ai:query', async (_event, { text, context, providerId, action, conversationHistory, customization, customPromptTemplate }) => {
     try {
       const provider = providerManager.getProvider(providerId)
       if (!provider) {
@@ -162,7 +163,7 @@ function setupIPC() {
       const STREAM_TIMEOUT_MS = 60000 // 60 seconds
       ;(async () => {
         try {
-          const stream = provider.complete({ text, context, action, conversationHistory })
+          const stream = provider.complete({ text, context, action, conversationHistory, customization, customPromptTemplate })
 
           // Buffer chunks for 50ms or 500 chars before flushing to reduce IPC overhead
           let buffer = ''
@@ -611,6 +612,45 @@ function setupIPC() {
 
   ipcMain.handle('db:workspaces:getConversations', (_event, workspaceId: string) => {
     return workspacesDb.getWorkspaceConversations(workspaceId)
+  })
+
+  // AI Preferences
+  ipcMain.handle('db:aiPreferences:get', () => {
+    return aiPreferencesDb.getAIPreferences()
+  })
+
+  ipcMain.handle('db:aiPreferences:update', (_event, updates: aiPreferencesDb.AIPreferencesUpdate) => {
+    return aiPreferencesDb.updateAIPreferences(updates)
+  })
+
+  // Custom Actions
+  ipcMain.handle('db:customActions:list', () => {
+    return aiPreferencesDb.getAllCustomActions()
+  })
+
+  ipcMain.handle('db:customActions:create', (_event, data: aiPreferencesDb.CustomActionCreate) => {
+    return aiPreferencesDb.createCustomAction(data)
+  })
+
+  ipcMain.handle('db:customActions:update', (_event, data: aiPreferencesDb.CustomActionUpdate) => {
+    return aiPreferencesDb.updateCustomAction(data)
+  })
+
+  ipcMain.handle('db:customActions:delete', (_event, id: string) => {
+    return aiPreferencesDb.deleteCustomAction(id)
+  })
+
+  // Document AI Context
+  ipcMain.handle('db:documentContext:get', (_event, documentId: string) => {
+    return aiPreferencesDb.getDocumentAIContext(documentId)
+  })
+
+  ipcMain.handle('db:documentContext:set', (_event, { documentId, contextInstructions, enabled }: { documentId: string; contextInstructions: string; enabled?: number }) => {
+    return aiPreferencesDb.setDocumentAIContext(documentId, contextInstructions, enabled)
+  })
+
+  ipcMain.handle('db:documentContext:delete', (_event, documentId: string) => {
+    return aiPreferencesDb.deleteDocumentAIContext(documentId)
   })
 
   // App info

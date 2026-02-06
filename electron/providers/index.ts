@@ -6,6 +6,21 @@ import { KeyStore } from '../security/key-store'
 
 export type ActionType = 'explain' | 'summarize' | 'define' | 'parse_equation' | 'explain_fundamental' | 'extract_terms'
 
+export type ResponseTone = 'standard' | 'formal' | 'casual' | 'technical' | 'eli5' | 'academic'
+export type ResponseLength = 'concise' | 'standard' | 'detailed'
+export type ResponseFormat = 'prose' | 'bullets' | 'step_by_step' | 'qa'
+
+export interface AICustomization {
+  tone?: ResponseTone
+  responseLength?: ResponseLength
+  responseFormat?: ResponseFormat
+  customSystemPrompt?: string | null
+  documentContext?: string | null
+  temperature?: number | null
+  maxTokens?: number | null
+  model?: string | null
+}
+
 export interface ConversationMessage {
   role: 'user' | 'assistant'
   content: string
@@ -14,8 +29,10 @@ export interface ConversationMessage {
 export interface CompletionRequest {
   text: string
   context?: string
-  action?: ActionType
+  action?: ActionType | string
   conversationHistory?: ConversationMessage[]
+  customization?: AICustomization
+  customPromptTemplate?: string
 }
 
 export interface AIProvider {

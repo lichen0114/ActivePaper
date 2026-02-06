@@ -1,6 +1,6 @@
 import type Database from 'better-sqlite3'
 
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 4
 const REQUIRED_TABLES_V1 = [
   'documents',
   'interactions',
@@ -23,8 +23,14 @@ const V3_TABLES = [
   'workspace_documents',
   'conversation_sources',
 ] as const
+const V4_TABLES = [
+  'ai_preferences',
+  'custom_actions',
+  'document_ai_context',
+] as const
 const REQUIRED_TABLES_V2 = [...REQUIRED_TABLES_V1, ...V2_TABLES] as const
 const REQUIRED_TABLES_V3 = [...REQUIRED_TABLES_V2, ...V3_TABLES] as const
+const REQUIRED_TABLES_V4 = [...REQUIRED_TABLES_V3, ...V4_TABLES] as const
 
 type FtsSeedPlan = {
   documents: boolean
@@ -113,6 +119,7 @@ function applyMigrations(db: Database.Database, fromVersion: number): void {
     () => migration1(db),
     () => migration2(db),
     () => migration3(db),
+    () => migration4(db),
   ]
 
   // Apply migrations sequentially
@@ -136,7 +143,10 @@ export function verifyAndRepairSchema(db: Database.Database): SchemaRepairResult
   const missingV3Tables = getMissingTables(db, REQUIRED_TABLES_V3).filter(
     (name) => !missingV1Tables.includes(name) && !missingV2Tables.includes(name)
   )
-  const missingAllTables = getMissingTables(db, REQUIRED_TABLES_V3)
+  const missingV4Tables = getMissingTables(db, REQUIRED_TABLES_V4).filter(
+    (name) => !missingV1Tables.includes(name) && !missingV2Tables.includes(name) && !missingV3Tables.includes(name)
+  )
+  const missingAllTables = getMissingTables(db, REQUIRED_TABLES_V4)
 
   if (missingV1Tables.length > 0) {
     db.transaction(() => {
@@ -144,6 +154,7 @@ export function verifyAndRepairSchema(db: Database.Database): SchemaRepairResult
       const seedPlan = planFtsSeed(db)
       migration2(db, { seedFts: seedPlan })
       migration3(db)
+      migration4(db)
       setSchemaVersion(db)
     })()
     return { repaired: true, missingTables: missingAllTables }
@@ -154,17 +165,27 @@ export function verifyAndRepairSchema(db: Database.Database): SchemaRepairResult
       const seedPlan = planFtsSeed(db)
       migration2(db, { seedFts: seedPlan })
       migration3(db)
+      migration4(db)
       setSchemaVersion(db)
     })()
-    return { repaired: true, missingTables: [...missingV2Tables, ...missingV3Tables] }
+    return { repaired: true, missingTables: [...missingV2Tables, ...missingV3Tables, ...missingV4Tables] }
   }
 
   if (missingV3Tables.length > 0) {
     db.transaction(() => {
       migration3(db)
+      migration4(db)
       setSchemaVersion(db)
     })()
-    return { repaired: true, missingTables: missingV3Tables }
+    return { repaired: true, missingTables: [...missingV3Tables, ...missingV4Tables] }
+  }
+
+  if (missingV4Tables.length > 0) {
+    db.transaction(() => {
+      migration4(db)
+      setSchemaVersion(db)
+    })()
+    return { repaired: true, missingTables: missingV4Tables }
   }
 
   if (getSchemaVersion(db) < SCHEMA_VERSION) {
@@ -455,4 +476,52 @@ function migration3(db: Database.Database): void {
     db.exec(`ALTER TABLE conversations ADD COLUMN workspace_id TEXT REFERENCES workspaces(id);`)
     db.exec(`CREATE INDEX IF NOT EXISTS idx_conversations_workspace ON conversations(workspace_id);`)
   }
+}
+
+function migration4(db: Database.Database): void {
+  db.exec(`
+    -- AI preferences: singleton row for global AI settings
+    CREATE TABLE IF NOT EXISTS ai_preferences (
+      id TEXT PRIMARY KEY,
+      tone TEXT NOT NULL DEFAULT 'standard',
+      response_length TEXT NOT NULL DEFAULT 'standard',
+      response_format TEXT NOT NULL DEFAULT 'prose',
+      custom_system_prompt TEXT,
+      custom_system_prompt_enabled INTEGER NOT NULL DEFAULT 0,
+      temperature REAL,
+      max_tokens INTEGER,
+      model_openai TEXT,
+      model_anthropic TEXT,
+      model_gemini TEXT,
+      model_ollama TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    -- Seed default preferences row
+    INSERT OR IGNORE INTO ai_preferences (id, created_at, updated_at)
+    VALUES ('default', strftime('%s','now')*1000, strftime('%s','now')*1000);
+
+    -- Custom actions: user-created prompt templates
+    CREATE TABLE IF NOT EXISTS custom_actions (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      emoji TEXT NOT NULL DEFAULT '🔧',
+      prompt_template TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+
+    -- Per-document AI context instructions
+    CREATE TABLE IF NOT EXISTS document_ai_context (
+      document_id TEXT PRIMARY KEY,
+      context_instructions TEXT NOT NULL,
+      enabled INTEGER NOT NULL DEFAULT 1,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE
+    );
+  `)
 }
