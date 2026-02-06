@@ -376,6 +376,6 @@ Built with [Electron](https://www.electronjs.org/), [React](https://react.dev/),
 
 [Back to top](#activepaper)
 
-<p>Made by Lichen Wang with love</p>
+<p>Made by Lichen Wang </p>
 
 </div>
