@@ -49,10 +49,10 @@ export class KeyStore {
 
   static setKey(providerId: string, apiKey: string): void {
     if (!safeStorage.isEncryptionAvailable()) {
-      console.warn('Encryption not available, storing key in plain text')
-      // Fallback: store in cache only (not persisted securely)
-      this.cache.set(providerId, apiKey)
-      return
+      throw new Error(
+        'System encryption is not available. API keys cannot be stored securely. ' +
+        'Please ensure your operating system keychain/credential manager is unlocked and available.'
+      )
     }
 
     const encrypted = safeStorage.encryptString(apiKey)

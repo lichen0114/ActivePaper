@@ -18,16 +18,20 @@
     "@fontsource/newsreader": "^5.2.10",
     "@types/katex": "^0.16.8",
     "better-sqlite3": "^12.6.2",
+    "electron-updater": "^6.7.3",
     "katex": "^0.16.28",
+    "mathjs": "^15.1.0",
     "pdfjs-dist": "^4.0.379",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-force-graph-2d": "^1.29.0",
+    "react-hot-toast": "^2.6.0",
     "react-markdown": "^9.0.1",
     "recharts": "^3.7.0",
     "remark-gfm": "^4.0.0"
   },
   "devDependencies": {
+    "@electron/fuses": "^2.0.0",
     "@electron/rebuild": "^4.0.3",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
@@ -69,12 +73,22 @@
         ]
       }
     ],
+    "publish": {
+      "provider": "github",
+      "owner": "activepaper",
+      "repo": "activepaper"
+    },
     "mac": {
       "category": "public.app-category.productivity",
       "target": [
         "dmg",
         "zip"
-      ]
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "notarize": false
     },
     "win": {
       "target": [
@@ -87,6 +101,7 @@
         "AppImage",
         "deb"
       ]
-    }
+    },
+    "afterSign": "scripts/notarize.js"
   }
 }

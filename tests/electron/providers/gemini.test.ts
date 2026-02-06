@@ -56,7 +56,7 @@ describe('GeminiProvider', () => {
   describe('complete', () => {
     it('should yield streamed response chunks', async () => {
       server.use(
-        http.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent', () => {
+        http.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:streamGenerateContent', () => {
           const encoder = new TextEncoder()
           const stream = new ReadableStream({
             async start(controller) {
@@ -83,12 +83,12 @@ describe('GeminiProvider', () => {
       expect(chunks).toEqual(['Hello', ' from', ' Gemini'])
     })
 
-    it('should include API key as query parameter', async () => {
-      let capturedUrl: string | null = null
+    it('should include API key as x-goog-api-key header', async () => {
+      let capturedHeaders: Headers | null = null
 
       server.use(
-        http.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent', ({ request }) => {
-          capturedUrl = request.url
+        http.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:streamGenerateContent', ({ request }) => {
+          capturedHeaders = request.headers
           const encoder = new TextEncoder()
           const stream = new ReadableStream({
             start(controller) {
@@ -104,14 +104,14 @@ describe('GeminiProvider', () => {
         // consume
       }
 
-      expect(capturedUrl).toContain(`key=${testApiKey}`)
+      expect(capturedHeaders?.get('x-goog-api-key')).toBe(testApiKey)
     })
 
     it('should include alt=sse query parameter', async () => {
       let capturedUrl: string | null = null
 
       server.use(
-        http.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent', ({ request }) => {
+        http.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:streamGenerateContent', ({ request }) => {
           capturedUrl = request.url
           const encoder = new TextEncoder()
           const stream = new ReadableStream({
@@ -143,7 +143,7 @@ describe('GeminiProvider', () => {
 
     it('should throw error on API error response', async () => {
       server.use(
-        http.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent', () => {
+        http.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:streamGenerateContent', () => {
           return HttpResponse.json(
             { error: { message: 'Quota exceeded' } },
             { status: 403 }
@@ -162,7 +162,7 @@ describe('GeminiProvider', () => {
       let capturedBody: unknown = null
 
       server.use(
-        http.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent', async ({ request }) => {
+        http.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:streamGenerateContent', async ({ request }) => {
           capturedBody = await request.json()
           const encoder = new TextEncoder()
           const stream = new ReadableStream({
@@ -190,7 +190,7 @@ describe('GeminiProvider', () => {
 
     it('should handle empty candidates array', async () => {
       server.use(
-        http.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent', () => {
+        http.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:streamGenerateContent', () => {
           const encoder = new TextEncoder()
           const stream = new ReadableStream({
             start(controller) {
@@ -212,7 +212,7 @@ describe('GeminiProvider', () => {
 
     it('should handle malformed JSON gracefully', async () => {
       server.use(
-        http.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:streamGenerateContent', () => {
+        http.post('https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-preview:streamGenerateContent', () => {
           const encoder = new TextEncoder()
           const stream = new ReadableStream({
             start(controller) {

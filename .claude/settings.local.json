@@ -24,7 +24,9 @@
       "Bash(xargs:*)",
       "Bash(wc:*)",
       "Bash(npm rebuild:*)",
-      "Bash(tee:*)"
+      "Bash(tee:*)",
+      "WebFetch(domain:www.electronjs.org)",
+      "WebFetch(domain:playwright.dev)"
     ]
   }
 }

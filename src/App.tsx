@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef, lazy, Suspense } from 'react'
+import { Toaster, toast } from 'react-hot-toast'
 import PDFViewer, { type PDFViewerRef } from './components/PDFViewer'
 import ResponsePanel from './components/ResponsePanel'
 import ProviderSwitcher from './components/ProviderSwitcher'
@@ -8,6 +9,8 @@ import STEMToolbar from './components/STEMToolbar'
 import LibraryView from './components/library/LibraryView'
 import TabBar from './components/TabBar'
 import ModeIndicator from './components/modes/ModeIndicator'
+import ConfirmDialog from './components/ConfirmDialog'
+import FirstRunWizard from './components/FirstRunWizard'
 import { ModeProvider } from './contexts/ModeContext'
 
 // Lazy load heavy components that include large dependencies (recharts, force-graph, pyodide)
@@ -42,6 +45,7 @@ import { useConceptStack } from './hooks/useConceptStack'
 import { useHighlights } from './hooks/useHighlights'
 import { useBookmarks } from './hooks/useBookmarks'
 import { useWorkspace } from './hooks/useWorkspace'
+import { useOfflineDetection } from './hooks/useOfflineDetection'
 import BookmarksList from './components/highlights/BookmarksList'
 import SearchModal from './components/search/SearchModal'
 import WorkspaceSwitcher from './components/workspace/WorkspaceSwitcher'
@@ -188,6 +192,25 @@ function AppContent() {
   // Workspace management
   const workspace = useWorkspace()
 
+  // Offline detection
+  const isOnline = useOfflineDetection()
+
+  // Confirmation dialog state
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean
+    title: string
+    message: string
+    onConfirm: () => void
+  }>({ isOpen: false, title: '', message: '', onConfirm: () => {} })
+
+  const showConfirm = useCallback((title: string, message: string, onConfirm: () => void) => {
+    setConfirmDialog({ isOpen: true, title, message, onConfirm })
+  }, [])
+
+  const hideConfirm = useCallback(() => {
+    setConfirmDialog(prev => ({ ...prev, isOpen: false }))
+  }, [])
+
   const [isBookmarksOpen, setIsBookmarksOpen] = useState(false)
   const [isSearchOpen, setIsSearchOpen] = useState(false)
   const [isNavigatorOpen, setIsNavigatorOpen] = useState(false)
@@ -207,6 +230,7 @@ function AppContent() {
     }
     await createHighlight(pageNumber, startOffset, endOffset, selectedText, color)
     clearSelection()
+    toast.success('Highlight created')
   }, [selectedText, pageNumber, startOffset, endOffset, createHighlight, clearSelection])
 
   // Handle bookmark click from bookmark list
@@ -417,6 +441,10 @@ function AppContent() {
       selectTabByIndex,
       handleAskAI: (action: ActionType) => {
         if (!selectedText) return
+        if (!navigator.onLine) {
+          toast.error('No internet connection. Switch to Ollama (local) or connect to the internet.')
+          return
+        }
         setIsPanelOpen(true)
         setCurrentAction(action)
         clearResponse()
@@ -448,6 +476,12 @@ function AppContent() {
   const handleAskAI = useCallback(async (action: ActionType = 'explain') => {
     if (!selectedText) return
 
+    // Check online status before making cloud AI requests
+    if (!isOnline) {
+      toast.error('No internet connection. Switch to Ollama (local) or connect to the internet.')
+      return
+    }
+
     setIsPanelOpen(true)
     setCurrentAction(action)
     clearResponse()
@@ -468,7 +502,7 @@ function AppContent() {
     await addMessage('assistant', '')
 
     await askAI(selectedText, pageContext, action)
-  }, [selectedText, pageContext, askAI, clearResponse, clearConversation, startConversation, addMessage, activeTab?.documentId])
+  }, [selectedText, pageContext, askAI, clearResponse, clearConversation, startConversation, addMessage, activeTab?.documentId, isOnline])
 
   // Update conversation when response streams in
   useEffect(() => {
@@ -599,6 +633,19 @@ function AppContent() {
       historyWithFollowUp
     )
   }, [conversation, isLoading, addMessage, clearResponse, askAI, currentAction])
+
+  // Wrap conversation deletion with confirmation
+  const handleDeleteConversation = useCallback((id: string) => {
+    showConfirm(
+      'Delete Conversation',
+      'This conversation and all its messages will be permanently deleted.',
+      () => {
+        deleteConversation(id)
+        hideConfirm()
+        toast.success('Conversation deleted')
+      }
+    )
+  }, [deleteConversation, showConfirm, hideConfirm])
 
   const handleConversationSelect = useCallback(async (id: string) => {
     setIsPanelOpen(true)
@@ -790,6 +837,38 @@ function AppContent() {
 
   return (
     <div className={`h-full flex flex-col bg-gray-900 ${isSimulating ? 'simulation-mode' : ''}`}>
+      {/* Toast notifications */}
+      <Toaster
+        position="bottom-right"
+        toastOptions={{
+          duration: 3000,
+          style: {
+            background: '#1f2937',
+            color: '#e5e7eb',
+            border: '1px solid #374151',
+            fontSize: '0.875rem',
+          },
+          success: { iconTheme: { primary: '#10b981', secondary: '#1f2937' } },
+          error: { duration: 5000, iconTheme: { primary: '#ef4444', secondary: '#1f2937' } },
+        }}
+      />
+
+      {/* Confirmation dialog */}
+      <ConfirmDialog
+        isOpen={confirmDialog.isOpen}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        onConfirm={confirmDialog.onConfirm}
+        onCancel={hideConfirm}
+      />
+
+      {/* Offline banner */}
+      {!isOnline && (
+        <div className="bg-amber-600/90 text-white text-xs text-center py-1.5 px-4">
+          No internet connection — cloud AI providers are unavailable. Use Ollama (local) or reconnect.
+        </div>
+      )}
+
       {/* Title bar / Top bar */}
       <div className="app-titlebar flex items-center justify-between px-4 bg-gray-800 border-b border-gray-700">
         <div className="flex items-center gap-3 pl-16">
@@ -847,6 +926,7 @@ function AppContent() {
                   : 'hover:bg-gray-700/50 text-gray-400 hover:text-gray-200'
               }`}
               title="Navigator"
+              aria-label="Toggle document navigator"
             >
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h10" />
@@ -859,6 +939,7 @@ function AppContent() {
             onClick={() => setIsSearchOpen(true)}
             className="p-1.5 rounded hover:bg-gray-700/50 text-gray-400 hover:text-gray-200 transition-colors"
             title="Search (Cmd+F)"
+            aria-label="Search"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
@@ -875,6 +956,7 @@ function AppContent() {
                   : 'hover:bg-gray-700/50 text-gray-400 hover:text-gray-200'
               }`}
               title="Bookmarks"
+              aria-label="Toggle bookmarks"
             >
               <svg className="w-5 h-5" fill={isBookmarksOpen ? 'currentColor' : 'none'} stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
@@ -1037,7 +1119,7 @@ function AppContent() {
               conversationId={conversationId}
               conversations={conversations}
               onConversationSelect={handleConversationSelect}
-              onConversationDelete={deleteConversation}
+              onConversationDelete={handleDeleteConversation}
               onNewConversation={handleNewConversation}
             />
 
@@ -1155,6 +1237,19 @@ function AppContent() {
 
 // Main App component wrapped with providers
 function App() {
+  const [isFirstRun, setIsFirstRun] = useState(() => {
+    return !localStorage.getItem('activepaper:setup-complete')
+  })
+
+  const handleSetupComplete = useCallback(() => {
+    localStorage.setItem('activepaper:setup-complete', '1')
+    setIsFirstRun(false)
+  }, [])
+
+  if (isFirstRun) {
+    return <FirstRunWizard onComplete={handleSetupComplete} />
+  }
+
   return (
     <ModeProvider>
       <AppContent />

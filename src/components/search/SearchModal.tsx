@@ -137,7 +137,7 @@ function SearchModal({
       />
 
       {/* Modal */}
-      <div className="fixed inset-x-4 top-20 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 md:w-[600px] max-h-[70vh] bg-gray-800 rounded-xl shadow-2xl border border-gray-700/50 z-50 flex flex-col overflow-hidden">
+      <div role="dialog" aria-modal="true" aria-label="Search" className="fixed inset-x-4 top-20 md:inset-x-auto md:left-1/2 md:-translate-x-1/2 md:w-[600px] max-h-[70vh] bg-gray-800 rounded-xl shadow-2xl border border-gray-700/50 z-50 flex flex-col overflow-hidden">
         {/* Header */}
         <header className="px-4 py-3 border-b border-gray-700/50">
           <SearchInput

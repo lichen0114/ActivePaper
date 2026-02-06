@@ -34,6 +34,9 @@ export function getDatabase(): Database.Database {
     // Enable foreign keys
     db.pragma('foreign_keys = ON')
 
+    // Enable WAL mode for better concurrent read/write performance
+    db.pragma('journal_mode = WAL')
+
     // Run migrations
     runMigrations(db)
   }

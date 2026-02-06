@@ -20,10 +20,11 @@ export class GeminiProvider implements AIProvider {
 
     const contents = this.buildContents(request)
 
-    const response = await fetch(`${GEMINI_API_URL}?key=${this.apiKey}&alt=sse`, {
+    const response = await fetch(`${GEMINI_API_URL}?alt=sse`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        'x-goog-api-key': this.apiKey,
       },
       body: JSON.stringify({
         contents,

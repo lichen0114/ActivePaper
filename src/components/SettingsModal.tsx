@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import { toast } from 'react-hot-toast'
 
 interface SettingsModalProps {
   isOpen: boolean
@@ -41,10 +42,12 @@ function SettingsModal({ isOpen, onClose, onKeyChange }: SettingsModalProps) {
   const [keyValue, setKeyValue] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [appInfo, setAppInfo] = useState<{ version: string; dataPath: string } | null>(null)
 
   useEffect(() => {
     if (isOpen) {
       loadKeyStatus()
+      window.api?.getAppInfo?.().then(setAppInfo).catch(() => {})
     }
   }, [isOpen])
 
@@ -81,6 +84,7 @@ function SettingsModal({ isOpen, onClose, onKeyChange }: SettingsModalProps) {
       setEditingKey(null)
       setKeyValue('')
       onKeyChange?.()
+      toast.success('API key saved')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to save API key')
     } finally {
@@ -94,6 +98,7 @@ function SettingsModal({ isOpen, onClose, onKeyChange }: SettingsModalProps) {
       await window.api.deleteApiKey(providerId)
       await loadKeyStatus()
       onKeyChange?.()
+      toast.success('API key removed')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to delete API key')
     }
@@ -108,13 +113,14 @@ function SettingsModal({ isOpen, onClose, onKeyChange }: SettingsModalProps) {
   if (!isOpen) return null
 
   return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" role="dialog" aria-modal="true" aria-labelledby="settings-title">
       <div className="bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-gray-700">
-          <h2 className="text-lg font-semibold text-gray-200">Settings</h2>
+          <h2 id="settings-title" className="text-lg font-semibold text-gray-200">Settings</h2>
           <button
             onClick={onClose}
+            aria-label="Close settings"
             className="p-1 rounded hover:bg-gray-700 text-gray-400 hover:text-gray-200"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -231,6 +237,49 @@ function SettingsModal({ isOpen, onClose, onKeyChange }: SettingsModalProps) {
               ))}
             </div>
           </div>
+
+          {/* Data Management */}
+          <div className="mt-6">
+            <h3 className="text-sm font-medium text-gray-300 mb-3">Data Management</h3>
+            <div className="space-y-2">
+              <button
+                onClick={async () => {
+                  try {
+                    const success = await window.api?.exportData()
+                    if (success) toast.success('Data exported')
+                  } catch {
+                    toast.error('Failed to export data')
+                  }
+                }}
+                className="w-full text-left px-4 py-3 bg-gray-700/50 rounded-lg hover:bg-gray-700 transition-colors"
+              >
+                <p className="text-sm font-medium text-gray-200">Export Data (JSON)</p>
+                <p className="text-xs text-gray-400">Export all documents, interactions, highlights, and concepts</p>
+              </button>
+              <button
+                onClick={async () => {
+                  try {
+                    const success = await window.api?.backupDatabase()
+                    if (success) toast.success('Database backed up')
+                  } catch {
+                    toast.error('Failed to backup database')
+                  }
+                }}
+                className="w-full text-left px-4 py-3 bg-gray-700/50 rounded-lg hover:bg-gray-700 transition-colors"
+              >
+                <p className="text-sm font-medium text-gray-200">Backup Database</p>
+                <p className="text-xs text-gray-400">Save a full copy of the database file</p>
+              </button>
+            </div>
+          </div>
+
+          {/* App Info */}
+          {appInfo && (
+            <div className="mt-6 text-xs text-gray-500 space-y-1">
+              <p>Version: {appInfo.version}</p>
+              <p className="truncate" title={appInfo.dataPath}>Data: {appInfo.dataPath}</p>
+            </div>
+          )}
 
           {/* Security note */}
           <div className="mt-6 p-3 bg-gray-700/30 rounded-lg">

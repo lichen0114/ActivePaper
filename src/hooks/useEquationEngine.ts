@@ -1,4 +1,5 @@
 import { useState, useCallback, useMemo } from 'react'
+import { evaluate } from 'mathjs'
 import type {
   EquationVariable,
   ParsedEquation,
@@ -183,12 +184,8 @@ export function useEquationEngine(options: UseEquationEngineOptions = {}) {
         const x = min + i * step
         varValues[graphIndependentVar] = x
 
-        // Evaluate the compute expression with current values
-        // Using Function constructor for safe evaluation
-        const varNames = Object.keys(varValues)
-        const varVals = Object.values(varValues)
-        const fn = new Function(...varNames, `return ${parsedEquation.computeExpression}`)
-        const y = fn(...varVals)
+        // Evaluate the compute expression with current values using mathjs (sandboxed)
+        const y = evaluate(parsedEquation.computeExpression, varValues) as number
 
         if (typeof y === 'number' && isFinite(y)) {
           points.push({ x, y })
@@ -221,10 +218,7 @@ export function useEquationEngine(options: UseEquationEngineOptions = {}) {
         varValues[v.name] = v.currentValue
       }
 
-      const varNames = Object.keys(varValues)
-      const varVals = Object.values(varValues)
-      const fn = new Function(...varNames, `return ${parsedEquation.computeExpression}`)
-      const result = fn(...varVals)
+      const result = evaluate(parsedEquation.computeExpression, varValues) as number
 
       return typeof result === 'number' && isFinite(result) ? result : null
     } catch {

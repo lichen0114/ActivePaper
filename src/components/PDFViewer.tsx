@@ -345,6 +345,11 @@ const PDFViewerInner = forwardRef<PDFViewerRef, PDFViewerProps>(function PDFView
 
     return () => {
       cancelled = true
+      // Cancel the in-flight loading task to prevent orphaned PDF objects
+      if (loadingTaskRef.current) {
+        loadingTaskRef.current.destroy()
+        loadingTaskRef.current = null
+      }
       pageRefs.current.clear()
     }
   }, [data, cancelAllRenderTasks])

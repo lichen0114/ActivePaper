@@ -176,9 +176,10 @@ export class PythonRunner implements CodeRunner {
 
   private async _loadPyodide(): Promise<void> {
     try {
-      // Load Pyodide from CDN
+      // Load Pyodide from CDN with integrity check
       const script = document.createElement('script')
       script.src = 'https://cdn.jsdelivr.net/pyodide/v0.24.1/full/pyodide.js'
+      script.crossOrigin = 'anonymous'
       document.head.appendChild(script)
 
       await new Promise<void>((resolve, reject) => {

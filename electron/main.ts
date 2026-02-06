@@ -5,6 +5,7 @@ import { ProviderManager } from './providers/index'
 import { KeyStore } from './security/key-store'
 import { getDatabase, closeDatabase } from './database/index'
 import { verifyAndRepairSchema } from './database/migrations'
+import { setupAutoUpdater, checkForUpdates } from './updater'
 import * as documentsDb from './database/queries/documents'
 import * as interactionsDb from './database/queries/interactions'
 import * as conceptsDb from './database/queries/concepts'
@@ -54,9 +55,18 @@ function createWindow() {
     mainWindow.webContents.openDevTools()
   } else {
     mainWindow.loadFile(path.join(DIST, 'index.html'))
+    // Only open DevTools in development (unpackaged) builds
+    if (!app.isPackaged) {
+      mainWindow.webContents.openDevTools()
+    }
   }
 
   createMenu()
+
+  // Setup auto-updater for production builds
+  if (app.isPackaged) {
+    setupAutoUpdater(mainWindow)
+  }
 }
 
 function createMenu() {
@@ -83,6 +93,11 @@ function createMenu() {
           click: () => {
             mainWindow?.webContents.send('tab:close-current')
           },
+        },
+        { type: 'separator' },
+        {
+          label: 'Check for Updates...',
+          click: () => checkForUpdates(),
         },
         { type: 'separator' },
         { role: 'quit' },
@@ -143,14 +158,18 @@ function setupIPC() {
       const abortController = new AbortController()
       activeStreams.set(channelId, abortController)
 
-      // Start streaming in background with IPC chunk buffering
+      // Start streaming in background with IPC chunk buffering and timeout
+      const STREAM_TIMEOUT_MS = 60000 // 60 seconds
       ;(async () => {
         try {
           const stream = provider.complete({ text, context, action, conversationHistory })
 
           // Buffer chunks for 50ms or 500 chars before flushing to reduce IPC overhead
           let buffer = ''
+          let totalSize = 0
+          const MAX_RESPONSE_SIZE = 2 * 1024 * 1024 // 2MB cap
           let lastFlush = Date.now()
+          let lastChunkTime = Date.now()
           const BUFFER_SIZE = 500
           const BUFFER_TIME = 50
 
@@ -162,19 +181,46 @@ function setupIPC() {
             }
           }
 
+          // Set up stream timeout - aborts if no chunk received within STREAM_TIMEOUT_MS
+          const timeoutInterval = setInterval(() => {
+            if (Date.now() - lastChunkTime > STREAM_TIMEOUT_MS) {
+              abortController.abort()
+              clearInterval(timeoutInterval)
+              mainWindow?.webContents.send(channelId, {
+                type: 'error',
+                error: 'Stream timed out — no response from AI provider for 60 seconds'
+              })
+            }
+          }, 5000)
+
           for await (const chunk of stream) {
             // Check for cancellation
             if (abortController.signal.aborted) {
               break
             }
 
+            lastChunkTime = Date.now()
             buffer += chunk
+            totalSize += chunk.length
+
+            // Cap total response size
+            if (totalSize > MAX_RESPONSE_SIZE) {
+              flush()
+              abortController.abort()
+              mainWindow?.webContents.send(channelId, {
+                type: 'error',
+                error: 'Response exceeded maximum size limit (2MB)'
+              })
+              break
+            }
 
             // Flush if buffer is large enough or enough time has passed
             if (buffer.length >= BUFFER_SIZE || Date.now() - lastFlush >= BUFFER_TIME) {
               flush()
             }
           }
+
+          clearInterval(timeoutInterval)
 
           // Flush any remaining content
           flush()
@@ -270,11 +316,17 @@ function setupIPC() {
     return KeyStore.deleteKey(providerId)
   })
 
-  // File operations (with error handling)
+  // File operations (with error handling and path validation)
   ipcMain.handle('file:read', async (_event, filePath: string) => {
     try {
+      // Validate file path: must end with .pdf to prevent arbitrary file reads
+      const normalizedPath = path.resolve(filePath)
+      if (!normalizedPath.toLowerCase().endsWith('.pdf')) {
+        throw new Error('Only PDF files can be read')
+      }
+
       const fs = await import('fs/promises')
-      const buffer = await fs.readFile(filePath)
+      const buffer = await fs.readFile(normalizedPath)
       // Convert Buffer to ArrayBuffer for proper IPC serialization with contextIsolation
       return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
     } catch (error) {
@@ -561,6 +613,55 @@ function setupIPC() {
     return workspacesDb.getWorkspaceConversations(workspaceId)
   })
 
+  // App info
+  ipcMain.handle('app:info', () => {
+    return {
+      version: app.getVersion(),
+      dataPath: app.getPath('userData'),
+    }
+  })
+
+  // Data export - export database as JSON
+  ipcMain.handle('data:export', async () => {
+    const result = await dialog.showSaveDialog(mainWindow!, {
+      defaultPath: `activepaper-export-${new Date().toISOString().slice(0, 10)}.json`,
+      filters: [{ name: 'JSON Files', extensions: ['json'] }],
+    })
+    if (result.canceled || !result.filePath) return false
+
+    const db = getDatabase()
+    const exportData = {
+      exportedAt: new Date().toISOString(),
+      version: app.getVersion(),
+      documents: db.prepare('SELECT * FROM documents').all(),
+      interactions: db.prepare('SELECT * FROM interactions').all(),
+      concepts: db.prepare('SELECT * FROM concepts').all(),
+      highlights: db.prepare('SELECT * FROM highlights').all(),
+      bookmarks: db.prepare('SELECT * FROM bookmarks').all(),
+      conversations: db.prepare('SELECT * FROM conversations').all(),
+      conversationMessages: db.prepare('SELECT * FROM conversation_messages').all(),
+      reviewCards: db.prepare('SELECT * FROM review_cards').all(),
+      workspaces: db.prepare('SELECT * FROM workspaces').all(),
+    }
+
+    const fs = await import('fs/promises')
+    await fs.writeFile(result.filePath, JSON.stringify(exportData, null, 2))
+    return true
+  })
+
+  // Database backup
+  ipcMain.handle('data:backup', async () => {
+    const result = await dialog.showSaveDialog(mainWindow!, {
+      defaultPath: `activepaper-backup-${new Date().toISOString().slice(0, 10)}.db`,
+      filters: [{ name: 'SQLite Database', extensions: ['db'] }],
+    })
+    if (result.canceled || !result.filePath) return false
+
+    const db = getDatabase()
+    await db.backup(result.filePath)
+    return true
+  })
+
   // Concept extraction using current AI provider
   ipcMain.handle('db:concepts:extract', async (_event, { text, response }: { text: string; response: string }) => {
     try {
@@ -602,6 +703,23 @@ AI Response:
   })
 }
 
+// Global error handlers for production stability
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught exception:', error)
+  // Show error dialog if window is available
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const { dialog: errorDialog } = require('electron')
+    errorDialog.showErrorBox(
+      'Unexpected Error',
+      `An unexpected error occurred:\n\n${error.message}\n\nThe application will continue running, but you may want to restart it.`
+    )
+  }
+})
+
+process.on('unhandledRejection', (reason) => {
+  console.error('Unhandled rejection:', reason)
+})
+
 app.whenReady().then(() => {
   // Initialize database
   const database = getDatabase()
@@ -624,5 +742,10 @@ app.on('window-all-closed', () => {
 })
 
 app.on('will-quit', () => {
+  // Cancel all active AI streams before shutdown
+  for (const [channelId, controller] of activeStreams) {
+    controller.abort()
+    activeStreams.delete(channelId)
+  }
   closeDatabase()
 })

@@ -325,5 +325,10 @@ interface Window {
     getConversationSources: (conversationId: string) => Promise<ConversationSource[]>
     setConversationWorkspace: (conversationId: string, workspaceId: string | null) => Promise<boolean>
     getWorkspaceConversations: (workspaceId: string) => Promise<Array<{ id: string; selected_text: string; title: string | null; created_at: number; updated_at: number }>>
+    // App info
+    getAppInfo: () => Promise<{ version: string; dataPath: string }>
+    // Data export & backup
+    exportData: () => Promise<boolean>
+    backupDatabase: () => Promise<boolean>
   }
 }

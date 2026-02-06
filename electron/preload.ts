@@ -240,14 +240,23 @@ contextBridge.exposeInMainWorld('api', {
     const { channelId } = result
 
     return new Promise((resolve, reject) => {
+      // Safety timeout: clean up listener if stream never completes (90s)
+      const cleanupTimeout = setTimeout(() => {
+        ipcRenderer.removeListener(channelId, handler)
+        onError?.('Stream listener timed out')
+        reject(new Error('Stream listener timed out'))
+      }, 90000)
+
       const handler = (_event: Electron.IpcRendererEvent, msg: StreamEvent) => {
         if (msg.type === 'chunk' && msg.data) {
           onChunk?.(msg.data)
         } else if (msg.type === 'done') {
+          clearTimeout(cleanupTimeout)
           ipcRenderer.removeListener(channelId, handler)
           onDone?.()
           resolve()
         } else if (msg.type === 'error') {
+          clearTimeout(cleanupTimeout)
           ipcRenderer.removeListener(channelId, handler)
           onError?.(msg.error || 'Unknown error')
           reject(new Error(msg.error))
@@ -575,5 +584,19 @@ contextBridge.exposeInMainWorld('api', {
 
   getWorkspaceConversations: (workspaceId: string): Promise<Array<{ id: string; selected_text: string; title: string | null; created_at: number; updated_at: number }>> => {
     return ipcRenderer.invoke('db:workspaces:getConversations', workspaceId)
+  },
+
+  // App info
+  getAppInfo: (): Promise<{ version: string; dataPath: string }> => {
+    return ipcRenderer.invoke('app:info')
+  },
+
+  // Data export & backup
+  exportData: (): Promise<boolean> => {
+    return ipcRenderer.invoke('data:export')
+  },
+
+  backupDatabase: (): Promise<boolean> => {
+    return ipcRenderer.invoke('data:backup')
   },
 })

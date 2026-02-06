@@ -80,10 +80,10 @@ describe('KeyStore', () => {
       expect(mockFs.writeFileSync).toHaveBeenCalled()
     })
 
-    it('should store in cache only when encryption is not available', () => {
+    it('should throw error when encryption is not available', () => {
       mockSafeStorage.isEncryptionAvailable.mockReturnValue(false)
 
-      KeyStore.setKey('openai', 'sk-test-key-123')
+      expect(() => KeyStore.setKey('openai', 'sk-test-key-123')).toThrow('System encryption is not available')
 
       expect(mockSafeStorage.encryptString).not.toHaveBeenCalled()
       expect(mockFs.writeFileSync).not.toHaveBeenCalled()
@@ -106,8 +106,9 @@ describe('KeyStore', () => {
 
   describe('getKey', () => {
     it('should return cached key if available', () => {
-      // Set a key first to populate cache
-      mockSafeStorage.isEncryptionAvailable.mockReturnValue(false)
+      // Set a key with encryption available to populate cache
+      mockFs.existsSync.mockReturnValue(true)
+      mockFs.readFileSync.mockReturnValue('{}')
       KeyStore.setKey('openai', 'cached-key')
 
       const result = KeyStore.getKey('openai')
@@ -159,7 +160,9 @@ describe('KeyStore', () => {
 
   describe('hasKey', () => {
     it('should return true if key is in cache', () => {
-      mockSafeStorage.isEncryptionAvailable.mockReturnValue(false)
+      // Set a key with encryption available to populate cache
+      mockFs.existsSync.mockReturnValue(true)
+      mockFs.readFileSync.mockReturnValue('{}')
       KeyStore.setKey('anthropic', 'cached-key')
 
       const result = KeyStore.hasKey('anthropic')
@@ -188,17 +191,18 @@ describe('KeyStore', () => {
 
   describe('deleteKey', () => {
     it('should remove key from cache and storage', () => {
-      // First set a key
-      mockSafeStorage.isEncryptionAvailable.mockReturnValue(false)
+      // First set a key with encryption available
+      mockFs.existsSync.mockReturnValue(true)
+      mockFs.readFileSync.mockReturnValue('{}')
       KeyStore.setKey('openai', 'to-delete')
 
-      // Mock storage with the key
-      mockFs.existsSync.mockReturnValue(true)
+      // Mock storage with the key for deleteKey
       mockFs.readFileSync.mockReturnValue(JSON.stringify({ openai: 'encrypted' }))
 
       const result = KeyStore.deleteKey('openai')
 
       expect(result).toBe(true)
+      // writeFileSync called for both setKey and deleteKey
       expect(mockFs.writeFileSync).toHaveBeenCalled()
     })
 
