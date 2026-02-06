@@ -14,6 +14,8 @@ and a metacognitive learning dashboard — built for students, researchers, and 
 [![CI](https://github.com/lichen0114/ai_pdf_reader/actions/workflows/ci.yml/badge.svg)](https://github.com/lichen0114/ai_pdf_reader/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/lichen0114/ai_pdf_reader?include_prereleases&label=Release)](https://github.com/lichen0114/ai_pdf_reader/releases)
 
+![ActivePaper Demo](assets/activepaper-demo.png)
+
 </div>
 
 ---
@@ -26,9 +28,7 @@ But ActivePaper goes further than a chatbot stapled to a PDF viewer. Its STEM to
 
 Everything you do is tracked in a metacognitive dashboard — a concept graph of what you've learned, a heatmap of where you struggled, and a spaced repetition system that resurfaces material before you forget it. Your data stays local in an encrypted SQLite database. Your API keys are stored in the system keychain. No telemetry, no cloud sync, no account required.
 
-## Screenshots
 
-![ActivePaper Demo](assets/activepaper-demo.png)
 
 ## Features
 
