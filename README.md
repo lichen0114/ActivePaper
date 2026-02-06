@@ -28,10 +28,7 @@ Everything you do is tracked in a metacognitive dashboard — a concept graph of
 
 ## Screenshots
 
-> [!NOTE]
-> **ActivePaper features a dark-themed glass-panel UI.** The reader view displays PDFs with a 400px response sidebar that streams AI responses in real-time markdown. A floating toolbar appears above text selections with action buttons. The dashboard view presents a force-directed concept graph, activity heatmap, and flashcard dock in a 70/30 grid layout. STEM tools open as overlays with interactive sliders, code editors, and breadcrumb navigation.
->
-> Screenshots and a demo video will be added here once the UI is finalized.
+![ActivePaper Demo](assets/activepaper-demo.png)
 
 ## Features
 
